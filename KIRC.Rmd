@@ -1,0 +1,661 @@
+
+---
+title: "Analysis of TCGA KIRC DNA methylation"
+subtitle: 'Data from [TCGA KIRC](https://portal.gdc.cancer.gov/repository?facetTab=cases&filters=%7B%22op%22%3A%22and%22%2C%22content%22%3A%5B%7B%22op%22%3A%22in%22%2C%22content%22%3A%7B%22field%22%3A%22cases.project.project_id%22%2C%22value%22%3A%5B%22TCGA-KIRC%22%5D%7D%7D%2C%7B%22op%22%3A%22in%22%2C%22content%22%3A%7B%22field%22%3A%22files.experimental_strategy%22%2C%22value%22%3A%5B%22Methylation%20Array%22%5D%7D%7D%5D%7D&searchTableTab=cases)'
+author: "Developed by [Gabriel Hoffman](http://gabrielhoffman.github.io/)"
+date: "Run on `r Sys.Date()`"
+documentclass: article
+output: 
+  html_document:
+  toc: true
+  smart: false
+vignette: >
+  %\VignetteIndexEntry{Analysis of TCGA KIRC DNA methylation}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+  %\usepackage[utf8]{inputenc}
+---
+
+<!--- 
+# run analysis
+ 
+cd /sc/orga/projects/psychencode/gabriel/decorate_analysis
+module purge
+module load udunits proj gdal geos pandoc openssl pandoc R
+source ~/.bash_profile
+
+export OMP_NUM_THREADS=1
+export R_LIBS=$R_LIBS_USER:$R_LIBS
+R --vanilla
+rmarkdown::render("/hpc/users/hoffmg01/scripts/decorate_analysis/KIRC.Rmd", output_dir='./', intermediates_dir='./'); system("cat KIRC.html | grep -v 'Found more than one class' | grep -v 'PythonEmbedInR' > KIRC2.html")
+
+
+--->
+
+
+```{r load.packages, echo=FALSE, message=FALSE, results='hide'}
+suppressPackageStartupMessages(library(knitr))
+suppressPackageStartupMessages(library(foreach))
+suppressPackageStartupMessages(library(data.table))
+suppressPackageStartupMessages(library(variancePartition)) 
+suppressPackageStartupMessages(library(GenomicRanges))  
+suppressPackageStartupMessages(library(genomation)) 
+suppressPackageStartupMessages(library(gridExtra)) 
+suppressPackageStartupMessages(library(ggplot2)) 
+suppressPackageStartupMessages(library(decorate)) 
+suppressPackageStartupMessages(library(BiocParallel))
+suppressPackageStartupMessages(library(cowplot))
+suppressPackageStartupMessages(library(qvalue)) 
+
+options(xtable.type="html")
+
+knitr::opts_chunk$set(
+  echo=FALSE,
+  warning=FALSE,
+  message=TRUE,
+  error = FALSE,
+  tidy = FALSE,
+  cache = TRUE,
+  cache.lazy = FALSE,
+  dev = c("png", "pdf"), 
+  fig.width=7, fig.height=7)
+
+options(markdown.HTML.stylesheet = 'css/custom.css')
+```
+
+```{r load.always, cache=FALSE, echo=FALSE, message=FALSE}
+register(SnowParam(4, "SOCK"))
+```
+
+```{r load.data}
+
+folder = "/sc/orga/projects/psychencode/resources/gdc/KIRC_methylation"
+
+# Illumina Methylation 450K data
+files = list.files(folder, pattern="*.gdc_hg38.txt.gz", recursive=TRUE, full.names=TRUE)
+
+methl.list = lapply( files, function(file){
+
+  # read file
+  df = fread( file )
+  colnames(df)[colnames(df) == 'Composite Element REF'] = 'name'
+
+  # reduce memory usage by dropping colums
+  if( file != files[1] ){
+    df = df[,1:2]
+  }
+
+  # get sample id 
+  id = gsub(".gdc_hg38.txt.gz", "", basename(file))
+  id = unlist(strsplit(id, '\\.'))
+
+  # get folder
+  fldr = unlist(strsplit(dirname(file), '/'))
+
+  # Set sample id and folder name
+  attr(df, "folder") = fldr[length(fldr)]
+  attr(df, "sampleID") = id[length(id)]
+
+  df
+})
+
+# merge file sinto single matrix
+methylData = Reduce(function(a, b){
+    merge(a, b, by = "name", all.x = TRUE, all.y = TRUE)
+  }, 
+  lapply(methl.list, function(x){
+    a = x[,c('name', 'Beta_value')]
+    colnames(a)[2] = attr(a, "sampleID")
+    a
+    } )
+  )
+probeNames = methylData$name
+methylData[,name:=NULL]
+methylData = as.data.frame(methylData)
+rownames(methylData) = probeNames
+
+# get probe info as GRanges
+probeInfo = with(methl.list[[1]], GRanges(Chromosome, IRanges(Start, End, names = name), Feature_Type=Feature_Type, Gene_Symbol=Gene_Symbol, Position_to_TSS=Position_to_TSS))
+
+# Set methylData order to same as probeInfo
+idx = match(names(probeInfo), rownames(methylData))
+methylData = methylData[idx,]
+
+# idx = match(probeInfo$name, rownames(methylData))
+# is.unsorted(idx)
+# any(is.na(idx))
+
+# reorder by chromosome position
+ord = order(probeInfo)
+probeInfo = probeInfo[ord]
+methylData = methylData[ord,]
+
+# mean imputation of probes with less than 10 missing samples
+countNA = apply(methylData, 1, function(x) sum(is.na(x)))
+mu = apply(methylData, 1, function(x) mean(x, na.rm=TRUE))
+
+for(idx in which(countNA > 0 & countNA < 10)){
+  # cat("\r", idx, '    ')
+  # methylData[idx,][is.na(methylData[idx,])] = mu[idx]
+
+  value = methylData[idx,]
+  methylData[idx,is.na(value)] = mu[idx]
+}
+
+# filter out probes with NA files
+methylData = methylData[which(countNA < 10),]
+probeInfo = probeInfo[which(countNA < 10)]
+
+# probe location must be valid
+idx = which(start(probeInfo) > 1)
+methylData = methylData[idx,]
+probeInfo = probeInfo[idx]
+
+# drop seqnames with no entries
+chrNameCount = table(seqnames(probeInfo))
+probeInfo = dropSeqlevels( probeInfo, names(chrNameCount[chrNameCount==0]))
+
+# get shorter sample names
+colnames(methylData) = sapply(strsplit(colnames(methylData), '-'), function(x) paste(x[1:4], collapse='-'))
+
+# sample metadata
+info = fread(paste0(folder, "/metadata/sample.tsv"), sep="\t")
+table(info$sample_type)
+info = info[sample_type %in% c('Primary Tumor', 'Solid Tissue Normal') & !is.na(sample_type),]
+info$sample_type = factor(info$sample_type , c('Solid Tissue Normal', 'Primary Tumor'))
+any(is.na(info$sample_type))
+
+# reorder info based on methylData
+ids = intersect(colnames(methylData), info$sample_submitter_id)
+
+info = droplevels(info[match(ids, sample_submitter_id),])
+methylData = methylData[,match(ids, colnames(methylData)),]
+
+identical( info$sample_submitter_id, colnames(methylData))
+```
+
+# Compute residuals
+```{r get.residuals.from.PCA}
+# Compute PCA on original dataset
+dcmp = svd( t(scale(t(methylData))), nu=2, nv=40)
+colnames(dcmp$v) = paste0("PC", 1:ncol(dcmp$v))
+
+# Compute residuals after accounting for PC's
+# and add back disease effect
+design = model.matrix(~  ., data.frame(Disease = info$sample_type, dcmp$v))
+fitFull = lmFit( methylData, design)
+fitFull = eBayes(fitFull)
+methylDataResiduals = residuals( fitFull, methylData) + coef(fitFull)[,'DiseasePrimary Tumor', drop=FALSE] %*% t(design[,'DiseasePrimary Tumor',drop=FALSE] )
+```
+
+```{r fit.differential}
+design = model.matrix(~ ., data.frame(Disease = info$sample_type))
+fitTest = lmFit( methylData, design)
+fitTest = eBayes(fitTest)
+
+
+```{r plot.pca}
+df = data.frame(info, dcmp$v[,1:20])
+
+ggplot(df, aes(PC1, PC2, color=sample_type)) + geom_point() + theme_bw(17) + theme(aspect.ratio=1, plot.title = element_text(hjust = 0.5)) + ggtitle("Original data")
+
+dcmpResid = svd( t(scale(t(methylDataResiduals))), nu=2, nv=2)
+colnames(dcmpResid$v) = paste0("PC", 1:ncol(dcmpResid$v))
+
+df = data.frame(info, dcmpResid$v[,1:2])
+ggplot(df, aes(PC1, PC2, color=sample_type)) + geom_point() + theme_bw(17) + theme(aspect.ratio=1, plot.title = element_text(hjust = 0.5)) + ggtitle("Residuals")
+rm(dcmpResid)
+```
+
+```{r differential.analysis}
+resDE = topTable(fitFull, coef="DiseasePrimary Tumor", number=Inf)
+table(resDE$adj.P.Val < 0.05)
+```
+
+# Learn local correlation structure
+```{r hclustering, message=FALSE, echo=TRUE, results="hide"} 
+# Compute correlation and hierarchical clustering on controls
+treeList = runOrderedClusteringGenome( methylDataResiduals[,which(info$sample_type=='Primary Tumor')], probeInfo, method.corr="spearman" )      
+```
+
+# Evaluate correlation structure versus distance
+```{r plot.corr.decay}
+dfDist = evaluateCorrDecay( treeList, probeInfo, "chr22" )
+  
+plotCorrDecay( dfDist, outlierQuantile=1e-5 )
+```
+
+# Create clusters and then
+# Measure strength of correlation structure in each cluster
+```{r scoreClusters, echo=TRUE, message=FALSE}
+treeListClusters = createClusters( treeList, method='meanClusterSize', meanClusterSize=c( 5, 10, 20, 30, 40, 50, 100, 200, 500) )
+
+# get total number of clusters
+n_clusters = countClusters( treeListClusters )
+
+# score each cluster to only retain  
+# clusters with strong correlation structure
+clstScore = scoreClusters(treeList, treeListClusters )
+```
+
+
+```{r hist.LEF}
+df_LEF = do.call('rbind', clstScore )
+df_LEF$id = factor(df_LEF$id, sort(unique(df_LEF$id)))
+
+ggplot(df_LEF, aes(LEF, color=id)) + geom_density() + theme_bw(17) + theme(aspect.ratio=1)
+
+ ggplot(df_LEF, aes(N, LEF, color=id)) + geom_point() + geom_smooth(se=FALSE) + theme_bw(17) + theme(aspect.ratio=1) + xlim(0, 100)
+```
+
+<!---
+```{r LEF.null}
+# Evaluate LEF when features are permuted
+clustScoreNull = runPermutedData( methylDataResiduals[,which(info$sample_type=='Primary Tumor')], probeInfo, method.corr="spearman",  meanClusterSize=c( 10, 20, 30, 40, 50, 100, 200, 500) ) 
+      
+df_LEF = do.call("rbind", clustScoreNull$clusterScores)
+df_LEF$id = factor(df_LEF$id, sort(unique(df_LEF$id)))
+ggplot(df_LEF, aes(LEF, color=id)) + geom_density() + theme_bw(17) + theme(aspect.ratio=1) + ggtitle("LEF for permuted data")
+```
+  
+LEF values at 5\% false positive rate: `r clustScoreNull$cutoffs$LEF`
+--->
+
+# Filter clusters based on strength of correlation
+```{r filterClusters, echo=TRUE, message=FALSE, results="hide"}
+# retain clusters based on filtering criteria
+# LEF is the fraction of variance explained by the first eigen-value
+clustInclude = retainClusters( clstScore, "LEF", .05 )
+    
+# get retained clusters  
+treeListClusters_filter = filterClusters( treeListClusters, clustInclude )
+
+# Collapse similar clusters
+treeListClusters_collapse = collapseClusters( treeListClusters_filter, probeInfo )    
+```
+
+# Test differential signal
+```{r diffcorr.test, echo=TRUE, message=FALSE, results="hide"}
+# get total number of clusters
+n_clusters = countClusters( treeListClusters_collapse )
+
+# Evaluate Differential Correlation between two subsets of data
+# do enough permutations to pass multiple testing cutoff
+param = SnowParam(6, "SOCK", progressbar=TRUE)
+
+resDiffCorr = evalDiffCorr( methylDataResiduals, info$sample_type, probeInfo, treeListClusters_collapse, BPPARAM=param, method="Box.permute", method.corr="spearman") 
+
+# get summary of results
+df = summary( resDiffCorr )
+ 
+# print results
+head(df)
+```
+
+Combine results to merge properties of each cluster into a single data.frame
+```{r combine.results, message=FALSE, echo=TRUE}
+df_results = combineResults( resDiffCorr, clstScore, treeListClusters, probeInfo)
+
+head(df_results[which(df_results$width > 10000),])
+```
+
+Of the `r sum(!is.na(df_results$pValue))` clusters tested, `r sum(df_results$p.adjust < 0.05, na.rm=TRUE)` have a adjusted p-value < 0.05.  Also, pi1=`r 1-qvalue(df_results$pValue)$pi0`.
+
+
+### Summary of cluster properties
+```{r cluster properties, message=FALSE}
+# Histogram of LEF
+ggplot(df_results, aes(LEF, fill=id)) + geom_histogram(alpha=0.7) + theme_bw(17) + xlim(0,1) + theme(aspect.ratio=1, legend.position="bottom", plot.title = element_text(hjust = 0.5)) + scale_fill_discrete(name = "Requested mean cluster size") + xlab("Lead eigenvalue fraction (LEF)") + ggtitle("Summarize LEF")
+
+# Histogram of mean absolute correlation
+ggplot(df_results, aes(mean_abs_corr, fill=id)) + geom_histogram(alpha=0.7) + theme_bw(17) + xlim(0,1) + theme(aspect.ratio=1, legend.position="bottom", plot.title = element_text(hjust = 0.5)) + scale_fill_discrete(name = "Requested mean cluster size") + xlab("Mean absolute correlation") + ggtitle("Summarize absolute correlation")
+
+# Boxplot of number of features per cluster
+df_results$id = factor(df_results$id, sort(as.numeric(unique(df_results$id))))
+ggplot(df_results, aes(id, N, fill=id)) + geom_boxplot() + theme_bw(17) + theme(aspect.ratio=1, legend.position="bottom", plot.title = element_text(hjust = 0.5)) + scale_fill_discrete(name = "Feature per cluster") + xlab("Requested mean cluster size") + ylab("Number of features") + ggtitle("Summarize feature per cluster") + coord_flip()
+```
+
+
+### Examine top cluster
+```{r plot.clusters.best, echo=TRUE, cache=FALSE, message=FALSE, results="hide"}   
+idx = 1
+# extract peak ID's from most significant cluster
+probeIDs = getFeaturesInCluster( treeListClusters_collapse, df$chrom[idx], df$cluster[idx], df$id[idx])
+    
+# get location of peaks in this cluster  
+query = range(probeInfo[names(probeInfo) %in% probeIDs])
+
+# expand window to include adjacent clusters
+window = 1e5 
+start(query) = start(query) - window
+end(query) = end(query) + window
+
+library(EnsDb.Hsapiens.v86)      
+ensdb = EnsDb.Hsapiens.v86
+   
+# Plot peaks in the query region
+
+locText = with( data.frame(query), paste0(seqnames, ':', format(start, big.mark=','), '-', format(end, big.mark=',')))
+
+main = paste0(df$chrom[idx], ': cluster ', df$cluster[idx], '\n', locText)
+
+plotDecorate( ensdb, treeList, treeListClusters_collapse, probeInfo, query, showGenes=TRUE) + ggtitle(main)
+```
+
+
+### Compare correlation structure along genome
+First, plot correlation structure for controls (metadata\$Disease==0).  Then, plot correlation structure for cases (metadata\$Disease==1).
+
+The cluster located at `r locText` has a p-value of `r format(df_results$pValue[idx], digits=4)` and a test statistic of `r format(df_results$stat[idx], digits=3)`.  The negative sign indicates a loss of correlation in the test set (i.e. Disease==1) compared to the baseline correlation in controls (i.e. Dissease==0)
+
+```{r plot2Decorate.query, fig.width=15, message=FALSE, results="hide", echo=FALSE, cache=FALSE}
+detach("package:EnsDb.Hsapiens.v86", unload=TRUE)
+library(EnsDb.Hsapiens.v86)      
+ensdb = EnsDb.Hsapiens.v86
+      
+# get location of peaks in this cluster  
+query = range(probeInfo[names(probeInfo) %in% probeIDs])
+
+# expand window to include adjacent clusters
+window = 1e5  
+start(query) = start(query) - window
+end(query) = end(query) + window
+
+fig1 = plotDecorate( ensdb, treeList, treeListClusters_collapse, probeInfo, query, data=methylDataResiduals[,which(info$sample_type == 'Solid Tissue Normal')])
+
+fig2 = plotDecorate( ensdb, treeList, treeListClusters_collapse, probeInfo, query, data=methylDataResiduals[,which(info$sample_type=='Primary Tumor')])
+plot_grid( fig1, fig2, ncol=2, labels=c('A: Solid Tissue Normal', 'B: Primary Tumor') )   
+```
+
+### Pairwise scatter plots
+```{r scatter, echo=TRUE, message=FALSE, cache=FALSE}
+
+ids = c('cg00674706', 'cg13641185')
+# ids = c('cg14665716', 'cg15787284')
+# ids = c('cg15787284', 'cg20744304')
+# ids = probeIDs
+
+C1 = cor(t(methylData[ids,info$sample_type==levels(info$sample_type)[1]]), method="sp")
+C2 = cor(t(methylData[ids,info$sample_type==levels(info$sample_type)[2]]), method="sp")
+C1 - C2
+# plot delta corr, vs magnatude
+
+plotScatterPairs( methylData, ids, info$sample_type) + ggtitle(main)
+
+# compare magnitude between cases and controls
+topTable(fitFull, coef="DiseasePrimary Tumor", number=Inf)[ids,]
+```
+
+```{r scatter.larger, echo=TRUE, message=FALSE, fig.width=15, fig.height = 15, cache=FALSE}
+idx = seq_len(min(20, length(probeIDs)))
+plotScatterPairs( methylData, probeIDs[idx], info$sample_type) + ggtitle(main) 
+```
+
+### Compare top cluster between cases and controls
+```{r plot.results, cache=FALSE, fig.width=15, fig.height=12, cache=FALSE}    
+# plot comparison of correlation matrices for peaks in probeIDs
+#  where data is subset by metadata$Disease
+main = paste0(df$chrom[1], ': cluster ', df$cluster[1])     
+plotCompareCorr( methylDataResiduals, probeIDs, info$sample_type) + ggtitle(main)      
+```
+
+# Highlight two significant regions
+## UBD
+```{r plot2Decorate.UBD, fig.width=15, message=FALSE, results="hide", echo=FALSE, cache=FALSE}
+detach("package:EnsDb.Hsapiens.v86", unload=TRUE)
+library(EnsDb.Hsapiens.v86)      
+ensdb = EnsDb.Hsapiens.v86
+      
+# UBD
+gr = genes(ensdb, filter = ~ gene_name == "UBD" & seq_name == '6')
+seqlevelsStyle(gr) = "UCSC"
+
+# get location of peaks in this cluster  
+query = range(gr)
+
+# expand window to include adjacent clusters
+window = 1e5  
+start(query) = start(query) - window
+end(query) = end(query) + window
+
+fig1 = plotDecorate( ensdb, treeList, treeListClusters_collapse, probeInfo, query, data=methylDataResiduals[,which(info$sample_type == 'Solid Tissue Normal')])
+
+fig2 = plotDecorate( ensdb, treeList, treeListClusters_collapse, probeInfo, query, data=methylDataResiduals[,which(info$sample_type=='Primary Tumor')])
+plot_grid( fig1, fig2, ncol=2, labels=c('A: Solid Tissue Normal', 'B: Primary Tumor') ) 
+```
+
+## PFKFB3
+```{r plot2Decorate.PFKFB3, fig.width=15, message=FALSE, results="hide", echo=FALSE, cache=FALSE}
+# PFKFB3
+gr = genes(ensdb, filter = ~ gene_name == "PFKFB3")
+seqlevelsStyle(gr) = "UCSC"
+# get location of peaks in this cluster  
+query = range(gr)
+
+# expand window to include adjacent clusters
+window = 1e5  
+start(query) = start(query) - window
+end(query) = end(query) + window
+
+fig1 = plotDecorate( ensdb, treeList, treeListClusters_collapse, probeInfo, query, data=methylDataResiduals[,which(info$sample_type == 'Solid Tissue Normal')])
+
+fig2 = plotDecorate( ensdb, treeList, treeListClusters_collapse, probeInfo, query, data=methylDataResiduals[,which(info$sample_type=='Primary Tumor')])
+plot_grid( fig1, fig2, ncol=2, labels=c('A: Solid Tissue Normal', 'B: Primary Tumor') )   
+```
+
+<!---
+```{r get.fdr}
+gr = genes(ensdb, filter = ~ gene_name == "PFKFB3")
+seqlevelsStyle(gr) = "UCSC"
+# get location of peaks in this cluster  
+query = range(gr)
+gr = probeInfo[probeInfo %within% query]
+clgr = getClusterRanges(probeInfo, treeListClusters_collapse)
+idx = findOverlap(clgr, grs)
+clustNames = unique(names(clgr[idx@from]))
+
+
+i = with(df_results, paste(id, chrom, cluster, sep='_')) %in% clustNames
+i = which(i)
+
+df_results[i,]
+
+probeIDs = getFeaturesInCluster( treeListClusters_collapse, df_results$chrom[i], as.numeric(df_results$cluster[i]), as.character(df_results$id[i]) )
+--->
+
+
+ 
+
+```{r scatter.example2}
+ids = names(probeInfo[probeInfo %within% query])
+
+C1 = cor(t(methylData[ids,info$sample_type==levels(info$sample_type)[1]]), method="sp")
+C2 = cor(t(methylData[ids,info$sample_type==levels(info$sample_type)[2]]), method="sp")
+D = abs(C1 - C2)
+
+i = which.max(apply(D, 2, max))
+sort(D[names(i),])
+
+ids = c('cg05686026', 'cg02572278')
+
+plotScatterPairs( methylData, ids, info$sample_type) + ggtitle(main)
+
+Y1 = t(methylData[ids,info$sample_type==levels(info$sample_type)[1]])
+Y2 = t(methylData[ids,info$sample_type==levels(info$sample_type)[2]])
+
+Y1 = data.frame(Y1)
+Y2 = data.frame(Y2)
+
+Y1$status = levels(info$sample_type)[1]
+Y2$status = levels(info$sample_type)[2]
+
+Y_combine = rbind(Y1, Y2)
+Y_combine$status = factor(Y_combine$status, levels(info$sample_type))
+
+library(gridExtra)
+fig1 = ggplot(Y1, aes(cg05686026, cg02572278)) + geom_point(color="#00ff40") + theme_bw(17) + theme(aspect.ratio=1) + geom_smooth(method="lm", se=FALSE)
+fig2 = ggplot(Y2, aes(cg05686026, cg02572278)) + geom_point(color="deepskyblue") + theme_bw(17) + theme(aspect.ratio=1) + geom_smooth(method="lm", se=FALSE, color='black')
+
+fig3 = ggplot(Y_combine, aes(cg05686026, color=status)) + geom_density() + theme_bw(17) + theme(aspect.ratio=1, legend.position='none') + scale_color_manual(values=c("#00ff40", 'deepskyblue'))
+fig4 = ggplot(Y_combine, aes(cg02572278, color=status)) + geom_density() + theme_bw(17) + theme(aspect.ratio=1, legend.position='none') + scale_color_manual(values=c("#00ff40", 'deepskyblue'))
+
+grid.arrange(fig1, fig2,fig3, fig4, ncol=4)
+
+# compare magnitude between cases and controls
+topTable(fitFull, coef="DiseasePrimary Tumor", number=Inf)[ids,]
+```
+
+
+
+<!---
+# Examine differential accessability signal for these peaks
+```{r DE_peaks, echo=TRUE}
+# design = model.matrix(~sample_type, info)
+# fit = lmFit( methylDataResiduals, design)
+# fit = eBayes(fit)
+
+# topTable(fit, coef='DxSchizo', number=Inf)[probeIDs,]
+```
+--->
+
+
+```{r multiple.plot2Decorate.query, fig.width=15, message=FALSE, results="hide", echo=FALSE}
+detach("package:EnsDb.Hsapiens.v86", unload=TRUE)
+library(EnsDb.Hsapiens.v86)      
+ensdb = EnsDb.Hsapiens.v86
+
+
+plotDiseaseBox = function(pid){
+
+  df = data.frame(y = methylDataResiduals[pid,], 
+    x = info$sample_type)
+
+  main = paste0(pid, '\nbeta = ', format(resDE[pid[1],'logFC'], digits=3), '; p = ', format(resDE[pid,'P.Value'], digits=3))
+
+  ggplot(df, aes(x,y)) + geom_boxplot() + theme_bw(8) + theme(plot.title = element_text(hjust = 0.5, size=8), aspect.ratio=1) + ggtitle(main) + xlab("Status") + ylab("Methylation residuals")
+}
+
+
+pdf("KIRC_plots.pdf", width=14)
+for(idx in which(df_results$p.adjust < 0.05 & df_results$width > 10000)[1:20] ){
+  # extract peak ID's from most significant cluster
+  probeIDs = getFeaturesInCluster( treeListClusters_collapse, df_results$chrom[idx], df_results$cluster[idx], df_results$id[idx])   
+  # get location of peaks in this cluster  
+  query = range(probeInfo[names(probeInfo) %in% probeIDs])
+
+  # expand window to include adjacent clusters
+  window = 1e5  
+  start(query) = start(query) - window
+  end(query) = end(query) + window
+
+  # Plot correlation structure
+  fig1 = plotDecorate( ensdb, treeList, treeListClusters_collapse, probeInfo, query, data=methylDataResiduals[,which(info$sample_type == 'Solid Tissue Normal')])
+
+  fig2 = plotDecorate( ensdb, treeList, treeListClusters_collapse, probeInfo, query, data=methylDataResiduals[,which(info$sample_type=='Primary Tumor')])
+
+  grid.arrange( fig1, fig2, ncol=2)
+
+  # Plot Differential methylation
+  figList = lapply( probeIDs, function(pid){ plotDiseaseBox(pid)})
+  do.call("grid.arrange", c(figList, ncol=8))
+}
+dev.off()
+
+```
+ 
+
+```{r save.significant.clusters}
+loc = '/sc/orga/projects/psychencode/gabriel/decorate_analysis/bed/'
+
+# all features
+rtracklayer::export.bed( probeInfo, paste0(loc, "KIRC_all.bed"))
+
+# background - only features consider in tests
+featureNames_background = getFeaturesInClusterList( treeListClusters_collapse, chrom=df_results$chrom, clustID=df_results$cluster, id=df_results$id)
+featureNames_background = unique(unlist(featureNames_background))
+rtracklayer::export.bed( probeInfo[featureNames_background], paste0(loc, "KIRC_background.bed"))
+
+# get significant peaks
+idx = which(df_results$p.adjust < 0.05)
+featureNames_signif = getFeaturesInClusterList( treeListClusters_collapse, chrom=df_results$chrom[idx], clustID=df_results$cluster[idx], id=df_results$id[idx])
+featureNames_signif = unique(unlist(featureNames_signif))
+rtracklayer::export.bed( probeInfo[featureNames_signif], paste0(loc, "KIRC_signif.bed"))
+
+# get significant peaks - UP
+idx = which(df_results$p.adjust < 0.05 & df_results$stat > 0)
+featureNames_signif = getFeaturesInClusterList( treeListClusters_collapse, chrom=df_results$chrom[idx], clustID=df_results$cluster[idx], id=df_results$id[idx])
+featureNames_signif = unique(unlist(featureNames_signif))
+rtracklayer::export.bed( probeInfo[featureNames_signif], paste0(loc, "KIRC_signif_up.bed"))
+
+# get significant peaks - DOWN
+idx = which(df_results$p.adjust < 0.05 & df_results$stat < 0)
+featureNames_signif = getFeaturesInClusterList( treeListClusters_collapse, chrom=df_results$chrom[idx], clustID=df_results$cluster[idx], id=df_results$id[idx])
+featureNames_signif = unique(unlist(featureNames_signif))
+rtracklayer::export.bed( probeInfo[featureNames_signif], paste0(loc, "KIRC_signif_down.bed"))
+
+```
+
+
+
+
+
+
+
+
+<!---
+# GREAT job id: 20190906-public-4.0.4-sQmQr2
+files = dir('/Users/gabrielhoffman/Dropbox/decorate/results/KIRC', pattern='greatExportAll.*tsv$', full.names=TRUE)
+
+files = "~/Downloads/KIRC_signif_up.tsv"
+res = lapply( files, function(file){
+  read.table(file, header=TRUE, sep='\t', stringsAsFactors=FALSE)
+})
+
+dfcombine = do.call("rbind", res)[,1:10]
+
+write.table(dfcombine, "KIRC_decorate.tsv", sep="\t", quote=TRUE, row.names=FALSE)
+
+genesets = c('GO:0044212', 'transcription regulatory region DNA binding',
+'GO:0000981',  'RNA polymerase II transcription factor activity, sequence-specific DNA binding',
+'GO:0031931',  'TORC1 complex',
+'HP:0000121',  'Nephrocalcinosis',
+'HP:0000787', 'Nephrolithiasis',
+'MP:0003613',  'abnormal kidney medulla development',
+'MP:0011366',  'absent metanephros',
+'GO:0048568',  'embryonic organ development',
+'GO:0048598', 'embryonic morphogenesis')
+genesets = matrix(genesets, ncol=2, byrow=TRUE)
+
+df = dfcombine[dfcombine$ID %in% genesets[,1],]
+df = df[df$Ontology != 'Mouse Phenotype Single KO',]
+
+df = df[match(genesets[,2], df$Desc),]
+
+df$Desc = factor(df$Desc, df$Desc)
+
+library(ggplot2)
+
+fig = ggplot(df, aes(Desc, -log10(HyperFdrQ))) + geom_bar(stat='identity', fill="navy") + coord_flip() + theme_bw(17) + theme(aspect.ratio=2) + ggtitle("KIRC Box.permute enrichment")
+file = '/Users/gabrielhoffman/Dropbox/decorate/results/KIRC/enrichment.pdf'
+ggsave(file, fig)
+
+--->
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

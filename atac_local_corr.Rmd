@@ -1,0 +1,312 @@
+
+---
+title: "decorate: Local correlation analysis of ATAC-seq"
+subtitle: 'Data from ATAC-seq from post mortem brain from [Bryois, et al. (2018)](https://www.nature.com/articles/s41467-018-05379-y) '
+author: "Developed by [Gabriel Hoffman](http://gabrielhoffman.github.io/)"
+date: "Run on `r Sys.Date()`"
+documentclass: article
+output: 
+  html_document:
+  toc: true
+  smart: false
+vignette: >
+  %\VignetteIndexEntry{decorate: Local correlation of ATAC-seq}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+  %\usepackage[utf8]{inputenc}
+---
+
+
+<!--- 
+# run analysis
+cd /sc/orga/projects/psychencode/gabriel/decorate_analysis
+module purge
+module load udunits proj gdal geos pandoc openssl pandoc R
+source ~/.bash_profile
+export https_proxy=http://mgmt01.chimera.hpc.mssm.edu:3128/
+export http_proxy=http://mgmt01.chimera.hpc.mssm.edu:3128/
+export ftp_proxy=http://mgmt01.chimera.hpc.mssm.edu:3128/
+
+export OMP_NUM_THREADS=1
+export R_LIBS=$R_LIBS_USER:$R_LIBS
+R --vanilla
+
+rmarkdown::render("/hpc/users/hoffmg01/scripts/decorate_analysis/atac_local_corr.Rmd", output_dir='./', intermediates_dir='./'); system("cat atac_local_corr.html | grep -v 'Found more than one class' | grep -v 'PythonEmbedInR' > atac_local_corr2.html")
+
+--->
+
+
+
+
+# Goal: Differential correlation analysis on epigenomic data
+### 1) Evaluate local correlations
+### 2) Identify blocks of correlated peaks
+### 3) Compare correlations between cases and controls
+
+Data is available from [Synapse](https://www.synapse.org//#!Synapse:syn2759792/wiki/69613)
+
+```{r load.packages, echo=TRUE, message=FALSE, results='hide'}
+suppressPackageStartupMessages(library(decorate))
+suppressPackageStartupMessages(library(knitr))
+suppressPackageStartupMessages(library(edgeR))
+suppressPackageStartupMessages(library(data.table)) 
+suppressPackageStartupMessages(library(GenomicRanges)) 
+
+options(xtable.type="html")
+
+knitr::opts_chunk$set(
+  echo=FALSE,
+  warning=FALSE,
+  message=TRUE,
+  error = FALSE,
+  tidy = FALSE,
+  cache = TRUE,
+  cache.lazy = FALSE,
+  dev = c("png", "pdf"), 
+  fig.width=7, fig.height=7)
+
+options(markdown.HTML.stylesheet = 'css/custom.css')
+```
+
+```{r load.always, cache=FALSE, echo=FALSE, message=FALSE}
+suppressPackageStartupMessages(library(doParallel))
+suppressPackageStartupMessages(library(BiocParallel))
+suppressPackageStartupMessages(library(synapser))
+# login once and then save info
+# synLogin("user.name", "password", rememberMe=TRUE)
+synLogin() 
+```
+
+# Download data
+```{r download, echo=TRUE}
+# chip-Seq counts
+chipCounts = read.table( synGet('syn17061266')$path, header=TRUE, stringsAsFactors=FALSE, sep='\t', row.names=1)
+# chipCounts = read.table( 'data/ATACSEQ_COUNT_MATRIX.tsv', header=TRUE, stringsAsFactors=FALSE, sep='\t', row.names=1)
+
+# # peak locations
+peakLocs_in = fread( synGet('syn17061264')$path )
+# peakLocs_in = fread( 'data/ATACSEQ_CONSENSUS_PEAKS.bed' )
+peakLocs = with(peakLocs_in, GRanges(V1, IRanges(V2, V3, names=V4)))
+```
+
+```{r metadata}
+meta_clinical = fread( synGet('syn17943350')$path )
+# meta_atac = fread( synGet('syn17943186')$path )
+
+# meta_clinical = fread( 'data/CMC_clinical_working.csv')
+meta_atac = fread( '/sc/orga/projects/psychencode/gabriel/decorate_analysis/data/CMC_Human_DLPFC_ATACSeq.csv')
+
+metaData = merge( meta_atac, meta_clinical, by.x='Individual_ID', by.y='Individual ID')
+
+idx = match( colnames(chipCounts), metaData$Assay_Sample_ID)
+metaData = metaData[idx,]
+# match( colnames(chipCounts), metaData$Assay_Sample_ID)
+
+# filter by Dx
+keep = metaData$Dx %in% c('SCZ', 'Control')
+metaData = metaData[keep,]
+chipCounts = chipCounts[,keep]
+metaData$Dx = factor(metaData$Dx, c("Control", "SCZ"))
+```
+
+# Processed data
+```{r process.counts, echo=TRUE}
+isexpr = rowSums(cpm(chipCounts)>1) >= 0.2*ncol(chipCounts)
+peakLocs2 = peakLocs[which(isexpr)]
+ 
+# Standard usage of limma/voom
+countObj = DGEList( chipCounts[isexpr,] )
+countObj = calcNormFactors( countObj )
+design = model.matrix( ~ as.character(`ATACSeq_report:Sequencing_Order_ID`) + 
+`ATACSeq_report:Mean_GC_content`+
+`ATACSeq_report:Mapped_Reads` +
+`Age of Death` +
+`PMI (in hours)` + Sex , metaData)
+vobj = voom( countObj, design, plot=TRUE)
+ 
+identical( names(peakLocs2), rownames(vobj))
+```
+
+# PCA on normalized ATAC-seeq
+```{r pca}
+dcmp = svd(vobj$E, nv=5, nu=0)
+frac = dcmp$d^2 / sum(dcmp$d^2) * 100
+xlab = paste0('PC1: ', round(frac[1], 1), '%')
+ylab = paste0('PC2: ', round(frac[2], 1), '%')
+plot(dcmp$v[,1], dcmp$v[,2], xlab=xlab, ylab=ylab, main="Original data")
+
+dsgn = model.matrix( ~ dcmp$v[,1:2] + as.character(`ATACSeq_report:Sequencing_Order_ID`) + 
+`ATACSeq_report:Mean_GC_content`+
+`ATACSeq_report:Mapped_Reads` +
+`Age of Death` +
+`PMI (in hours)` + Sex , metaData)
+fitPC = lmFit(vobj, dsgn)
+quantResid = residuals( fitPC, vobj )
+
+dcmp = svd(quantResid, nv=5, nu=0) 
+frac = dcmp$d^2 / sum(dcmp$d^2) * 100
+xlab = paste0('PC1: ', round(frac[1], 1), '%')
+ylab = paste0('PC2: ', round(frac[2], 1), '%')
+plot(dcmp$v[,1], dcmp$v[,2], xlab=xlab, ylab=ylab,main="After regressing out 2 PC's")
+```
+
+```{r voom.again}
+vobj2 = voom( countObj, dsgn, plot=TRUE) 
+fitPC2 = lmFit(vobj2, dsgn)
+quantResid2 = residuals( fitPC2, vobj2 )
+```
+
+# Identify differentially accessable peaks
+```{r differential.accessability}
+dsgn = model.matrix( ~ dcmp$v[,1:2] + as.character(`ATACSeq_report:Sequencing_Order_ID`) + 
+`ATACSeq_report:Mean_GC_content`+
+`ATACSeq_report:Mapped_Reads` +
+`Age of Death` +
+`PMI (in hours)` + Sex + Dx, metaData)
+
+fitDE = lmFit(vobj2, dsgn)
+
+fitDE = eBayes(fitDE)
+
+topTable(fitDE, coef='DxSCZ')
+```
+
+# Learn local correlation structure
+```{r hclustering, message=FALSE, echo=TRUE, results="hide"} 
+# Compute correlation and hierarchical clustering on controls
+treeList = runOrderedClusteringGenome( quantResid2[,metaData$Dx=='Control'], peakLocs2 )       
+```
+
+
+# Evaluate correlation structure versus distance
+```{r plot.corr.decay}
+# decay in original data
+treeListOriginal = runOrderedClusteringGenome( vobj$E[,metaData$Dx=='Control'], peakLocs2 )   
+dfDistOriginal = evaluateCorrDecay( treeListOriginal, peakLocs2, "chr22" )
+plotCorrDecay( dfDistOriginal, method="R", xlim=c(500, 1e7) )
+   
+# decay in residuals
+dfDist = evaluateCorrDecay( treeList, peakLocs2, "chr22" )
+plotCorrDecay( dfDist, method="R", xlim=c(500, 1e7) )
+```
+
+# Create clusters and then measure strength of correlation structure in each cluster
+```{r scoreClusters, echo=TRUE, message=FALSE}
+treeListClusters = createClusters( treeList, method='meanClusterSize', meanClusterSize=c( 10, 20, 30, 40, 50, 100, 200) )
+
+# get total number of clusters
+n_clusters = countClusters( treeListClusters )
+
+# score each cluster to only retain  
+# clusters with strong correlation structure
+clstScore = scoreClusters(treeList, treeListClusters, BPPARAM=SerialParam() )
+```
+
+
+```{r hist.LEF}
+df_LEF = lapply(clstScore, function(x){
+ with(x, data.frame(id, N, chrom, cluster, LEF))
+  })
+df_LEF = do.call('rbind', df_LEF )
+df_LEF$id = factor(df_LEF$id, sort(unique(df_LEF$id)))
+
+ggplot(df_LEF, aes(LEF, color=id)) + geom_density() + theme_bw(17) + theme(aspect.ratio=1)
+```
+
+# Filter clusters based on strength of correlation
+```{r filterClusters, echo=TRUE, message=FALSE, results="hide"}
+# retain clusters based on filterign criteria
+# If lead eigen value fraction (LEF) > 40% then ke/ep clusters
+# LEF is the fraction of variance explained by the first eigen-value
+clustInclude = retainClusters( clstScore, "LEF", 0.1 )
+
+# get retained clusters  
+treeListClusters_filter = filterClusters( treeListClusters, clustInclude )
+
+# Collapse similar clusters
+treeListClusters_collapse = collapseClusters( treeListClusters_filter, peakLocs2 )    
+```
+
+<!---
+# Plot chr20
+```{r plot.clusters, echo=TRUE, message=FALSE, results="hide"}  
+library(EnsDb.Hsapiens.v86)      
+ensdb = EnsDb.Hsapiens.v86
+
+clusterValues = treeListClusters_collapse[['chr20']]
+ 
+query = range(peakLocs2[seqnames(peakLocs2) == "chr20"])
+     
+plotDecorate( ensdb, treeList, treeListClusters_collapse, peakLocs2, query, showGenes=FALSE)
+```
+--->
+
+# Test differential signal
+```{r sled, echo=TRUE, message=FALSE, results="hide"}
+# get total number of clusters
+n_clusters = countClusters( treeListClusters_collapse )
+
+# Evaluate Differential Correlation between two subsets of data
+param = SnowParam(6, "SOCK", progressbar=TRUE)
+
+ecdBox = evalDiffCorr( quantResid2, metaData$Dx, peakLocs2, treeListClusters_collapse, BPPARAM=param, method="Box.permute" )
+
+ecdSLE = evalDiffCorr( quantResid2, metaData$Dx, peakLocs2, treeListClusters_collapse, BPPARAM=param, method="deltaSLE" )
+
+# get summary of results
+df = summary( ecdBox )
+ 
+# print results
+head(df)
+```
+
+```{r print.df, echo=FALSE}
+head(df)
+```
+
+### Examine top cluster
+```{r plot.clusters.best, echo=TRUE, cache=FALSE, message=FALSE, results="hide"}   
+# extract peak ID's from most significant cluster
+peakIDs = getFeaturesInCluster( treeListClusters_collapse, df$chrom[1], df$cluster[1], df$id[1])
+    
+# get location of peaks in this cluster  
+query = range(peakLocs2[names(peakLocs2) %in% peakIDs])
+
+# expand window to include adjacent clusters
+window = 1e5 
+start(query) = start(query) - window
+end(query) = end(query) + window
+
+library(EnsDb.Hsapiens.v86)      
+ensdb = EnsDb.Hsapiens.v86
+   
+# Plot peaks in the query region
+plotDecorate( ensdb, treeList, treeListClusters_collapse, peakLocs2, query, showGenes=TRUE)
+```
+
+
+### Compare top cluster between cases and controls
+```{r plot.results, cache=FALSE}    
+# plot comparison of correlation matrices for peaks in peakIDs
+#  where data is subset by metadata$Disease
+main = paste0(df$chrom[1], ': cluster ', df$cluster[1])     
+plotCompareCorr( quantResid2, peakIDs, metaData$Dx) + ggtitle(main)
+```
+
+# Examine differential accessability signal for these peaks
+```{r DE_peaks, echo=TRUE}
+topTable(fitDE, coef='DxSCZ', number=Inf)[peakIDs,]
+```
+
+
+```{r multiple plots}
+df_results = combineResults( ecdBox, clstScore, treeListClusters, peakLocs2)
+head(df_results)
+```
+
+
+
+
+
+
+

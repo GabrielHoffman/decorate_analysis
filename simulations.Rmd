@@ -1,0 +1,525 @@
+
+---
+title: "Simulations for testing difference in correlation matrices"
+subtitle: 
+author: "Developed by [Gabriel Hoffman](http://gabrielhoffman.github.io/)"
+date: "Run on `r Sys.Date()`"
+documentclass: article
+output: 
+  html_document:
+  toc: true
+  smart: false
+vignette: >
+  %\VignetteIndexEntry{Simulate difference in correlation matrices}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+  %\usepackage[utf8]{inputenc}
+---
+
+<!--- 
+# run analysis
+ 
+cd /sc/orga/projects/psychencode/gabriel/decorate_analysis
+source ~/.bash_profile
+module load udunits proj gdal geos pandoc openssl
+
+export OMP_NUM_THREADS=1
+R --vanilla
+rmarkdown::render("/hpc/users/hoffmg01/scripts/decorate_analysis/simulations.Rmd", output_dir='./', intermediates_dir='./'); system("cat simulations.html | grep -v 'Found more than one class' | grep -v 'PythonEmbedInR' > simulations2.html")
+
+# on minerva
+\cp -f /sc/orga/projects/psychencode/gabriel/decorate_analysis/simulations2.html /hpc/users/hoffmg01/www/software/decorate/simulations.html
+
+--->
+
+
+```{r load.packages, echo=FALSE, message=FALSE, results='hide'}
+library(decorate)
+library(clusterGeneration)
+library(mvtnorm)
+library(foreach)
+library(doParallel)
+library(reshape2)
+library(ggplot2)
+library(data.table)
+library(gridExtra)
+
+options(xtable.type="html")
+
+knitr::opts_chunk$set(
+  echo=FALSE,
+  warning=FALSE,
+  message=TRUE,
+  error = FALSE,
+  tidy = FALSE,
+  cache = TRUE,
+  cache.lazy = FALSE,
+  dev = c("png", "pdf"), 
+  fig.width=7, fig.height=7)
+
+options(markdown.HTML.stylesheet = 'css/custom.css')
+```
+
+```{r load.always, cache=FALSE, echo=FALSE, message=FALSE}
+if( exists('cl') ){
+  stopCluster(cl)
+}
+cl = makeCluster(24)
+registerDoParallel(cl)
+```
+
+Here we evaluate statistical methods for detecting difference between two sample correlation matricies.  Let `C1` be correlation between a set of features in the dataset `Y1` with `N1` samples, and let `C2` be correlation in dataset `Y2` with `N2` samples.  Alternatively, let `Y` be the combined dataset of the subsets indicated by categorical `variable`. 
+
+# Statistical methods
+* Methods implemented in the [psych](https://www.rdocumentation.org/packages/psych/versions/1.8.12/topics/cortest.mat) R package:
+  + Steiger method with Fisher transform 
+    + 'Steiger.fisher': `cortest(C1, C2,fisher=TRUE)`
+  + Steiger method without Fisher transform 
+    + 'Steiger': `cortest(C1, C2, N1, N2, fisher=FALSE)`
+  + Jennrich method
+    + 'Jennrich': `cortest.jennrich(C1, C2, N1, N2)`
+  + Factors analysis method 
+    + 'Factor': `cortest.mat(C1, C2, N1, N2)`
+
+<!--- --->
+
+* Paired Mann-Whitney test comparing elements of two correlation matirices: 
+  + 'Mann.Whitney': `wilcox.test( C1[lower.tri(C1)], C2[lower.tri(C2)], paired=TRUE)`
+
+<!---
+* Kruskal-Wallis test comparing elements of two correlation matirices: 
+  + 'Kruskal.Wallis': `kruskal.test( C1[lower.tri(C1)], C2[lower.tri(C2)])`
+--->
+
+* sparse Leading Eigen-Value [sLED](https://projecteuclid.org/euclid.aoas/1507168849) available [here](https://github.com/lingxuez/sLED).  
+  + Uses permutations, so is very computationally demanding.   Decorate implements a parallelized, adaptive permutation approach that stops early for tests that are not close to significant. 
+
+<!--- --->
+
+* Methods implemented in sLED package
+  + 'Cai.max': `Cai.max.test( Y1, Y2 )`       
+  + 'Schott.Frob': `Schott.Frob.test( Y1, Y2 )`    
+  + 'Chang.maxBoot': `Chang.maxBoot.test( Y1, Y2 )` 
+  + 'WL.randProj': `WL.randProj.test( Y1, Y2 )`  
+  + 'LC.U': `LC.U.test( Y1, Y2 )` 
+
+<!--- --->
+
+* Box's M-test for homogeneity of covariance matrices implemented in [heplots](https://rdrr.io/cran/heplots/man/boxM.html)
+  + 'Box': `boxM(Y, variable)`
+  + **Proposed here:** Box's M-test with empirical degrees of freedom of the $\chi^2$ null distribution estimated by fast permutations.
+    + 'Box.permute': `boxM_permute(Y, variable)` 
+
+<!--- --->
+
+* Test developed by [Delaneau, et al.](https://science.sciencemag.org/content/364/6439/eaat8266).  Evaluates the influence of sample `i` by comparing the correlations based on the full dataset to the correlation after dropping sample `i`.  This gives a score for each sample.  A test of association between this sample-level score and the variable of interest is then evaluated.  If this variable has two categories, a Wilcoxon test is used and for more than two categories a Kruskal-Wallis test is used.  If the variable is continuous, a Spearman correlation test is used. 
+  +  'Delaneau': `delaneau.test( Y, variable)`  
+
+<!--- --->
+
+* **Proposed here:** Evaluates the influence of sample `i` by comparing the sparse leading eigen-value of the correlation matrix based on the full dataset to sparse leading eigen-value of the correlation matrix after dropping sample `i`.   This gives a score for each sample.  A test of association between this sample-level score and the variable of interest is then evaluated.  If this variable has two categories, a Wilcoxon test is used and for more than two categories a Kruskal-Wallis test is used.  If the variable is continuous, a Spearman correlation test is used.   
+  + 'deltaSLE': `sle.test( Y, variable)`  
+
+
+# Method properties
+```{r method.properties, fig.width=12, fig.height=4}
+methodTable = matrix('', nrow=7, ncol=5)
+colnames(methodTable) = c("deltaSLE", 'Delaneau', "Box.permute", "sLED", "Other tests")
+rownames(methodTable) = c('Controls false positive rate', 'Powerful', 'Fast', 'Compare more than two categories',  "Produces sample level scores", 'Test continuous variable', 'Applicable to p > N')
+
+methodTable[1,] = c("+", '+', "+", "+", "varies")
+methodTable[2,] = c("+", '+', "+", "+", "varies")
+methodTable[3,] = c("+", '+', "+", "", "+")
+methodTable[4,] = c("+", '+', "+", "", '')
+methodTable[5,] = c("+", '+', "", "", '')
+methodTable[6,] = c("+", '+', "", "", '')
+methodTable[7,] = c("+", '+', "", "+", '')
+
+library(ggplot2)
+library(grid)
+library(gridExtra)
+
+grid.newpage()
+grid.table(methodTable, theme=ttheme_default(padding = unit(c(5, 5), "mm")))
+```
+
+
+
+# Simulation 1
+#### Estimate false positive rate under the null.
+
+Simulation results are shown comparing correlation matricies for **p** features for **N** samples.  Most methods are only applicable to positive definite matricies corresponding to **N > p**.  Only Mann-Whitney, sLED, Delaneau and deltaSLE are applicable dataset with **N > p**, so the remaing methods do not give results simulations in this case (i.e. top right of figures).
+
+To determine control of the false positive rate, 5000 simulations were performed under the null model of no difference between correlation structure in the two datasets (i.e. `C1 == C2`).   
+
+<!---
+ Simuation 1) Letting `ev` be the eigen values of `C1`, and `alpha = rnorm(p, 0, sd=0.3)`, `C2` was constructed with the same eigen vectors as `C1`, but setting the eigen values to `ev*alpha`. 2) Apply rnorm(1, 0, sd=0.5) scaling factor to only the first eigen-value.
+--->
+
+## 
+Note that x-axis stops at 0.2, but often the false positive rate of the Factor and Jennich methods exceed this value.
+```{r run.null.sims}
+# n_features_array = c(5, 10, 15, 30, 40, 50, 75, 100)
+# N_array = c(25, 50, 100, 200, 400)
+
+methods = c( "deltaSLE", "Delaneau", "Box.permute", "sLED", "Mann.Whitney", 
+  "Steiger.fisher", "Steiger", "Jennrich", "Factor", "Cai.max", "Chang.maxBoot", "LC.U", "WL.randProj", "Schott.Frob", "Box" ) 
+
+
+n_features_array = c(5, 10, 15, 30, 40, 50, 75, 100)
+N_array = c(25, 50, 100, 200)
+
+# methods = c( "deltaSLE", "Delaneau", "Box.permute", "sLED" ) 
+
+
+# n_features_array = c(5, 75, 100)
+# N_array = c(25, 50)
+
+# methods = c("Box", "Box.permute", "Delaneau", "deltaSLE") 
+# n_features_array = c(50, 100)
+# N_array = c(30, 60)
+
+pkgs = c('clusterGeneration', 'mvtnorm', 'decorate', 'psych', "foreach")
+resFPR = foreach( i = seq_len(2000), .combine=rbind, .packages=pkgs ) %dopar% {
+  foreach(n_features = n_features_array, .combine=rbind) %do% {
+
+    # C = cov2cor(genPositiveDefMat(n_features)$Sigma)
+    C = matrix(.8, n_features, n_features)
+    diag(C) = 1
+
+    foreach(N = N_array, .combine=rbind) %do% {
+
+      N1 = N2 = N
+      Y = rmvnorm(N1+N2, rep(0,nrow(C)), C)
+      group = factor(c(rep(0, N1), rep(1, N2)), c(0,1))
+
+      # sLED
+      Y1 = Y[group==levels(group)[1],]
+      Y2 = Y[group==levels(group)[2],]
+      res_sLED = decorate:::.sLED(X=Y1, Y=Y2, npermute=1000, verbose=FALSE)$pVal
+
+      # all other tests
+      if( N > n_features){
+        resList = sapply( methods[methods!="sLED"], function(method){
+          corrMatrix.test( Y, group, method)$pVal
+        })  
+        resList['sLED'] = res_sLED
+      }else{
+        # allows rank deficient
+        resList = sapply( c("Delaneau", "deltaSLE", "Mann.Whitney"), function(method){
+          corrMatrix.test( Y, group, method)$pVal
+        }) 
+
+        resList['sLED'] = res_sLED
+        resList = c(resList, rep(NA, length(methods)-4))
+        names(resList)[-c(1:4)] = methods[! methods%in% c("Delaneau", "deltaSLE", "sLED", "Mann.Whitney")]
+      }
+
+      c(N = N, n_features = n_features, resList[methods])
+    }
+  }
+}
+
+resFPR = data.table(resFPR)
+
+df = melt(resFPR, id.vars=c("N", "n_features"))
+colnames(df)[3] = "method"
+df$method = factor(df$method, methods)
+```
+
+
+```{r plot.sims.fpr, fig.height=10, fig.width=16, cache=FALSE}
+# False positive rate at p < 0.05
+df_count = df[,sum(value <0.05) / nrow(.SD), by=c("N", "n_features", "method")]
+df_count = df_count[order(N, n_features),]
+
+df_count[,label:=paste0("N=", N, ', p=', n_features)] 
+df_count$label = factor(df_count$label, levels=unique(df_count$label))
+
+ggplot(df_count, aes(method,pmin(.2,V1), fill=method)) + geom_bar(stat="identity") + theme_bw(10) + theme(legend.position='none', aspect.ratio=1, strip.text = element_text(size=10), strip.text.x = element_text(margin = margin(.2,0,.2,0, "cm"))) + ylab("False positive rate at p < 0.05)") + geom_hline(yintercept=0.05, linetype="dashed") + facet_wrap(~label, ncol=8) + ylim(0, .2) + coord_flip()   
+```
+
+
+# Simulation 2
+In group 1, all pairwise correlations are 0.80 and in group 2 all pairwise correlations are 0.75.  
+
+To test the power of each method, 1000 null simulations were performed in addition to 1000 simulations with different correlation structure (i.e.`C1 != C2`).
+
+### Performance based on Area Under the Precision Recall (AURP) curve
+```{r run.power.evalue}
+res_power = foreach( i = seq_len(1000), .combine=rbind, .packages=pkgs ) %dopar% {
+  foreach(n_features = n_features_array, .combine=rbind) %do% {
+
+    # C = cov2cor(genPositiveDefMat(n_features)$Sigma)
+    C = matrix(.8, n_features, n_features)
+    diag(C) = 1
+
+    foreach( beta = c(0, 1), .combine=rbind) %do% {
+     
+      if( beta == 0){
+        C2 = C
+      }else{ 
+        # dcmp = eigen(C)
+        # dcmp$values[1:min(20, n_features)] = dcmp$values[1:min(20, n_features)] * 1.5
+        # C2 = dcmp$vectors %*% diag(dcmp$values) %*% t(dcmp$vectors)
+        # C2 = cov2cor(C2)
+        C2 = matrix(.75, n_features, n_features)
+        diag(C2) = 1
+      }
+    
+      foreach(N = N_array, .combine=rbind) %do% {
+
+        cat(paste('\r', N, beta, n_features, i, '      ', sep=" "))
+
+        N1 = N2 = N
+        Y1 = rmvnorm(N1, rep(0,nrow(C)), C)
+        Y2 = rmvnorm(N2, rep(0,nrow(C)), C2)
+        Y = rbind(Y1, Y2)
+        group = factor(c(rep(0, N1), rep(1, N2)), c(0,1))
+
+        # sLED
+        Y1 = Y[group==levels(group)[1],]
+        Y2 = Y[group==levels(group)[2],]
+        res_sLED = decorate:::.sLED(X=Y1, Y=Y2, npermute=1000, verbose=FALSE)$pVal
+
+        # all other tests
+        if( N > n_features){
+          resList = sapply( methods[methods!="sLED"], function(method){
+            corrMatrix.test( Y, group, method)$pVal
+          })  
+          resList['sLED'] = res_sLED
+        }else{
+          # allows rank deficient
+          resList = sapply( c("Delaneau", "deltaSLE", "Mann.Whitney"), function(method){
+            corrMatrix.test( Y, group, method)$pVal
+          }) 
+
+          resList['sLED'] = res_sLED
+          resList = c(resList, rep(NA, length(methods)-4))
+          names(resList)[-c(1:4)] = methods[! methods%in% c("Delaneau", "deltaSLE", "sLED", "Mann.Whitney")]
+
+          # resList = resList[match(methods, names(resList))]
+        }
+
+        c(beta = beta, N = N, n_features = n_features, resList[methods])
+      }   
+    }
+  }
+}
+
+res_power = data.table(res_power)
+
+df_power = melt(res_power, id.vars=c("beta", "N", "n_features"))
+colnames(df_power)[colnames(df_power)=="variable"] = "method"
+df_power$method = factor(df_power$method, methods)
+```
+
+
+```{r plot.power, fig.height=10, fig.width=16, cache=FALSE}
+library(PRROC)
+    
+resPR = foreach( N_ = unique(df_power$N), .combine=rbind ) %do% {
+  foreach(n_features_ = unique(df_power$n_features), .combine=rbind ) %do% {
+    foreach(method_ = unique(df_power$method), .combine=rbind) %do% {
+
+      df_sub = df_power[N==N_ & n_features==n_features_ & method == method_,]
+
+      if( all(is.na(df_sub$value)) ){
+         res = c(N=N_, n_features=n_features_, method=method_, AUPR=NA)
+      }else{
+        pr = with(df_sub, pr.curve( value[beta==0], value[beta==1], rand.compute=TRUE)) 
+
+        res = c(N=N_, n_features=n_features_, method=method_, AUPR=pr$auc.integral)
+      }
+      res
+    }
+  }
+}    
+
+resPR = data.table(data.frame(resPR))
+resPR$method = levels(df_power$method)[resPR$method]
+resPR$method = factor(resPR$method, levels(df_power$method))
+    
+resPR[,label:=paste0("N=", N, ', p=', n_features)] 
+resPR$label = factor(resPR$label, levels=unique(resPR$label))
+
+ggplot(resPR, aes(method, AUPR, fill=method) ) + geom_bar(stat="identity") + theme_bw(10) + theme(legend.position='none', aspect.ratio=1, strip.text = element_text(size=10), strip.text.x = element_text(margin = margin(.2,0,.2,0, "cm"))) + ylab("AUPR") + geom_hline(yintercept=0.5, linetype="dashed") + facet_wrap(~label, ncol=8) + ylim(0, 1) + coord_flip()
+```
+
+### Precision Recall curves
+```{r pr.curve, cache=FALSE, fig.height=10, fig.width=16, cache=FALSE}
+
+df = foreach( N_ = unique(df_power$N), .combine=rbind ) %do% {
+  foreach(n_features_ = unique(df_power$n_features), .combine=rbind ) %do% {
+    prList = foreach(method_ = unique(df_power$method)) %do% {
+      df_sub = df_power[N==N_ & n_features==n_features_ & method == method_,]
+
+      if( all(is.na(df_sub$value)) ){
+         pr = NULL
+      }else{
+        if( length(unique(df_sub$value)) == 1){
+          df_sub$value = runif(nrow(df_sub), 0, 1e-5)
+        }
+        pr = with(df_sub, pr.curve( value[beta==0], value[beta==1], rand.compute=TRUE, curve=TRUE)) 
+      }
+      pr
+    }
+    names(prList) = unique(df_power$method)
+
+    if( is.null(prList[[1]]) ){
+      dfpr = foreach( method = names(prList), .combine=rbind ) %do% {
+
+        data.frame(recall = c(0,0), precision =c(0,0), method=method, rnd.value=0.5, stringsAsFactors=FALSE)
+      }
+
+    }else{
+      dfpr = foreach( method = names(prList), .combine=rbind ) %do% {
+        pr = data.table(as.data.frame(prList[[method]]$curve))
+        if(nrow(pr) == 0){
+          res = data.frame(recall=0, precision=0, method=method)
+        }else{
+          colnames(pr) = c( "recall", "precision", "score")
+          pr = pr[,score:=NULL]
+          pr[,precision:=round(precision,3)]
+          res = data.frame(unique(pr), method)
+          res = res[order(res$precision, decreasing=TRUE),]
+        }
+        res
+      }
+      # dfpr$method = factor(dfpr$method, df_plots$method)
+      # col = df_plots$color[df_plots$method %in% levels(dfpr$method)]
+
+      rnd.value = prList[[1]]$rand$curve[1,2]
+      dfpr$rnd.value = rnd.value 
+
+    }
+    aupr.rand.score = prList[[method]]$rand$auc.integral
+    dfpr$N = N_
+    dfpr$n_features = n_features_
+    dfpr
+  }
+}    
+
+df = data.table(df)
+
+df = df[order(N, n_features),]
+df[,label:=paste0("N=", N, ', p=', n_features)] 
+df$label = factor(df$label, levels=unique(df$label))
+
+ggplot(df, aes(recall, precision, color=method)) + geom_line() + theme_bw(12) + xlab("Recall") + ylab("Precision") + xlim(0,1) + ylim(0,1) + theme(aspect.ratio=1, plot.title = element_text(hjust = 0.5), legend.position='none') + facet_wrap(~label, ncol=8)
+
+```
+
+
+
+# Simulation 3
+In group 1, all pairwise correlations are 0.80 and in group 2 half of the pairwise correlations are set to 0.75 and the rest remain at 0.80.  This followed by a small correction to make matrix positive definite.
+
+To test the power of each method, 1000 null simulations were performed in addition to 1000 simulations with different correlation structure (i.e.`C1 != C2`).
+
+### Performance based on Area Under the Precision Recall (AURP) curve
+```{r run.power.evalue.some}
+res_power = foreach( i = seq_len(1000), .combine=rbind, .packages=pkgs ) %dopar% {
+  foreach(n_features = n_features_array, .combine=rbind) %do% {
+      
+    # C = cov2cor(genPositiveDefMat(n_features)$Sigma)
+    C = matrix(.8, n_features, n_features)
+    diag(C) = 1
+
+    foreach( beta = c(0, 1), .combine=rbind) %do% {
+     
+      if( beta == 0){
+        C2 = C
+      }else{ 
+        C2 = C
+        k = sample.int(nrow(C2), nrow(C2)*.5)
+        j = sample.int(nrow(C2), nrow(C2)*.5)
+        C2[k,j] = .75
+        C2[j,k] = .75
+        dcmp = eigen(C2)
+        dcmp$values = pmax(dcmp$values, 1e-6)
+        C2 = dcmp$vectors %*% diag(dcmp$values) %*% t(dcmp$vectors)
+        C2 = cov2cor(C2)
+      }
+
+      foreach(N = N_array, .combine=rbind) %do% {
+
+        cat(paste('\r', N, beta, n_features, i, '      ', sep=" "))
+
+        N1 = N2 = N
+        Y1 = rmvnorm(N1, rep(0,nrow(C)), C)
+        Y2 = rmvnorm(N2, rep(0,nrow(C)), C2)
+        Y = rbind(Y1, Y2)
+        group = factor(c(rep(0, N1), rep(1, N2)), c(0,1))
+
+        # sLED
+        Y1 = Y[group==levels(group)[1],]
+        Y2 = Y[group==levels(group)[2],]
+        res_sLED = decorate:::.sLED(X=Y1, Y=Y2, npermute=1000, verbose=FALSE)$pVal
+
+        # all other tests
+        if( N > n_features){
+          resList = sapply( methods[methods!="sLED"], function(method){
+            corrMatrix.test( Y, group, method)$pVal
+          })  
+          resList['sLED'] = res_sLED
+        }else{
+          # allows rank deficient
+          resList = sapply( c("Delaneau", "deltaSLE", "Mann.Whitney"), function(method){
+            corrMatrix.test( Y, group, method)$pVal
+          }) 
+
+          resList['sLED'] = res_sLED
+          resList = c(resList, rep(NA, length(methods)-4))
+          names(resList)[-c(1:4)] = methods[! methods%in% c("Delaneau", "deltaSLE", "sLED", "Mann.Whitney")]
+
+          # resList = resList[match(methods, names(resList))]
+        }
+
+        c(beta = beta, N = N, n_features = n_features, resList[methods])
+      }   
+    }
+  }
+}
+
+res_power = data.table(res_power)
+
+df_power = melt(res_power, id.vars=c("beta", "N", "n_features"))
+colnames(df_power)[colnames(df_power)=="variable"] = "method"
+df_power$method = factor(df_power$method, methods)
+```
+
+
+```{r plot.power.som, fig.height=12, fig.width=16, cache=FALSE}
+library(PRROC)
+    
+resPR = foreach( N_ = unique(df_power$N), .combine=rbind ) %do% {
+  foreach(n_features_ = unique(df_power$n_features), .combine=rbind ) %do% {
+    foreach(method_ = unique(df_power$method), .combine=rbind) %do% {
+
+      df_sub = df_power[N==N_ & n_features==n_features_ & method == method_,]
+
+      if( all(is.na(df_sub$value)) ){
+         res = c(N=N_, n_features=n_features_, method=method_, AUPR=NA)
+      }else{
+        pr = with(df_sub, pr.curve( value[beta==0], value[beta==1], rand.compute=TRUE)) 
+
+        res = c(N=N_, n_features=n_features_, method=method_, AUPR=pr$auc.integral)
+      }
+      res
+    }
+  }
+}    
+
+resPR = data.table(data.frame(resPR))
+resPR$method = levels(df_power$method)[resPR$method]
+resPR$method = factor(resPR$method, levels(df_power$method))
+    
+resPR[,label:=paste0("N=", N, ', p=', n_features)] 
+resPR$label = factor(resPR$label, levels=unique(resPR$label))
+
+ggplot(resPR, aes(method, AUPR, fill=method) ) + geom_bar(stat="identity") + theme_bw(10) + theme(legend.position='none', aspect.ratio=1, strip.text = element_text(size=10), strip.text.x = element_text(margin = margin(.2,0,.2,0, "cm"))) + ylab("AUPR") + geom_hline(yintercept=0.5, linetype="dashed") + facet_wrap(~label, ncol=8) + ylim(0, 1) + coord_flip()
+```
+
+
+
