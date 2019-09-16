@@ -1,6 +1,6 @@
 ---
 title: "decorate: Local correlation analysis of DNA methylation"
-subtitle: 'Data from DNA methylation data post mortem brain from [Jaffe, et al. (2016)](https://www.nature.com/articles/nn.4181) '
+subtitle: 'DNA methylation data post mortem brain from [Jaffe, et al. (2016)](https://www.nature.com/articles/nn.4181) '
 author: "Developed by [Gabriel Hoffman](http://gabrielhoffman.github.io/)"
 date: "Run on `r Sys.Date()`"
 documentclass: article
@@ -34,7 +34,7 @@ rmarkdown::render("/hpc/users/hoffmg01/scripts/decorate_analysis/methyl_scz_deco
 
 --->
 
-Code from https://github.com/andrewejaffe/devMeth450k/blob/f2d50c438ae558edc96e852463fd2cee3be7768e/05_sz_diffs.R
+Raw data and processing scripts are available from Jaffe, et al. [here](https://github.com/andrewejaffe/devMeth450k).  This workflow starts with the normalized, QCd data that I posted [here](https://www.synapse.org/#!Synapse:syn20781698)
 
 ```{r load.packages, echo=TRUE, message=FALSE, results='hide'}
 suppressPackageStartupMessages(library(knitr))
@@ -65,10 +65,30 @@ options(markdown.HTML.stylesheet = 'css/custom.css')
 register(SnowParam(4, "SOCK", progressbar=TRUE))
 ```
 
+```{r, echo=TRUE }
+# load gene locations
+# this is ENSEMBL v75 from the hg19 assembly
+# but other versions and assemblies are available
+library(EnsDb.Hsapiens.v75)
+```
+
+```{r reload, cache=FALSE, echo=FALSE}
+detach('package:EnsDb.Hsapiens.v75', unload=TRUE)
+library(EnsDb.Hsapiens.v75)      
+ensdb = EnsDb.Hsapiens.v75
+```
+
+```{r load.always, cache=FALSE, echo=TRUE, message=FALSE}
+suppressPackageStartupMessages(library(synapser))
+# login once and then save info
+# synLogin("user.name", "password", rememberMe=TRUE)
+synLogin() 
+```
+# Load data
 ```{r load.data}
-response = readRDS("/sc/orga/projects/psychencode/gabriel/decorate_analysis/data/rdas/response.RDS")
-metadata = readRDS("/sc/orga/projects/psychencode/gabriel/decorate_analysis/data/rdas/metadata.RDS")
-featureLocation = readRDS("/sc/orga/projects/psychencode/gabriel/decorate_analysis/data/rdas/featureLocation.RDS")
+response = readRDS( synGet('syn20781704')$path )
+metadata = readRDS( synGet('syn20781702')$path )
+featureLocation = readRDS( synGet('syn20781701')$path )
 
 # features must have with of at least 2
 end(featureLocation) = end(featureLocation) + 1
@@ -77,7 +97,7 @@ end(featureLocation) = end(featureLocation) + 1
 metadata$Dx = factor(metadata$Dx, c("Control", "Schizo"))
 ```
 
-# compute residuals
+# Compute residuals
 ```{r get.residuals}
 ## Get residuals for decorate
 design = model.matrix(~ Dx + Age + Race + negControl_PC1 + negControl_PC2 + negControl_PC3 + negControl_PC4, metadata)
@@ -92,25 +112,8 @@ residValues = residuals( fit, response)
 topTable(fit, coef='DxSchizo')
 ```
 
-```{r get.resid.2}
-# dcmp = svd( t(scale(t(residValues))), nu=2, nv=5)
-
-# ## Get residuals for decorate
-# design = model.matrix(~ Dx + Age + Race + negControl_PC1 + negControl_PC2 + negControl_PC3 + negControl_PC4, metadata) #  + dcmp$v[,1:5]
-
-# fit = lmFit( response, design)
-# fit = eBayes( fit )
-
-# # residuals + Dx
-# # residValues = residuals( fit, response) + coef(fit)[,'DxSchizo']
-# residValues = residuals( fit, response)
-```
-
-
-
-
 # Learn local correlation structure
-```{r hclustering, message=FALSE, echo=TRUE, results="hide"} 
+```{r hclustering, message=FALSE, echo=TRUE}
 # Compute correlation and hierarchical clustering on controls
 treeList = runOrderedClusteringGenome( residValues[,metadata$Dx=='Control'], featureLocation, method.corr="spearman" )       
 ```
@@ -149,19 +152,8 @@ df_LEF$id = factor(df_LEF$id, sort(unique(df_LEF$id)))
 ggplot(df_LEF, aes(LEF, color=id)) + geom_density() + theme_bw(17) + theme(aspect.ratio=1)
 ```
 
-<!---
-```{r LEF.null}
-# Evaluate LEF when features are permuted
-# clustScoreNull = runPermutedData(response[,metadata$Dx=='Control'], featureLocation, method.corr="spearman",  meanClusterSize=c( 10, 20, 30, 40, 50, 100, 200, 500) ) 
-      
-# df_LEF = do.call("rbind", clustScoreNull$clusterScores)
-# df_LEF$id = factor(df_LEF$id, sort(unique(df_LEF$id)))
-# ggplot(df_LEF, aes(LEF, color=id)) + geom_density() + theme_bw(17) + theme(aspect.ratio=1) + ggtitle("LEF for permuted data")
-```
---->
-
 # Filter clusters based on strength of correlation
-```{r filterClusters, echo=TRUE, message=FALSE, results="hide"}
+```{r filterClusters, echo=TRUE, message=FALSE}
 # retain clusters based on filterign criteria
 # If lead eigen value fraction (LEF) > 40% then ke/ep clusters
 # LEF is the fraction of variance explained by the first eigen-value
@@ -176,14 +168,15 @@ treeListClusters_collapse = collapseClusters( treeListClusters_filter, featureLo
 
 
 # Test differential signal
-```{r diffcorr.test, echo=TRUE, message=FALSE, results="hide"}
+```{r diffcorr.test, echo=TRUE, message=FALSE}
 # get total number of clusters
 n_clusters = countClusters( treeListClusters_collapse )
 
 # Evaluate Differential Correlation between two subsets of data
 ecdBox = evalDiffCorr( residValues, metadata$Dx, featureLocation, treeListClusters_collapse, npermute, method = "Box.permute", method.corr="spearman")
 
-ecdSLE = evalDiffCorr( residValues, metadata$Dx, featureLocation, treeListClusters_collapse, npermute, method = "deltaSLE", method.corr="spearman")
+# Analysis with deltaSLE
+# ecdSLE = evalDiffCorr( residValues, metadata$Dx, featureLocation, treeListClusters_collapse, npermute, method = "deltaSLE", method.corr="spearman")
 
 # get summary of results
 df = summary( ecdBox )
@@ -207,57 +200,38 @@ Of the `r sum(!is.na(df_results$pValue))` clusters tested, `r sum(df_results$p.a
 ### Summary of cluster properties
 ```{r cluster properties, message=FALSE}
 # Histogram of LEF
-ggplot(df_results, aes(LEF, fill=id)) + geom_histogram(alpha=0.7) + theme_bw(17) + xlim(0,1) + theme(aspect.ratio=1, legend.position="bottom", plot.title = element_text(hjust = 0.5)) + scale_fill_discrete(name = "Requested mean cluster size") + xlab("Lead eigenvalue fraction (LEF)") + ggtitle("Summarize LEF")
+ggplot(df_results, aes(LEF, fill=id)) + geom_histogram(alpha=0.7) + 
+  theme_bw(17) + xlim(0,1) + 
+  theme(aspect.ratio=1, legend.position="bottom", 
+    plot.title = element_text(hjust = 0.5)) + 
+  scale_fill_discrete(name = "Requested mean cluster size") + 
+  xlab("Lead eigenvalue fraction (LEF)") + 
+  ggtitle("Summarize LEF")
 
 # Histogram of mean absolute correlation
-ggplot(df_results, aes(mean_abs_corr, fill=id)) + geom_histogram(alpha=0.7) + theme_bw(17) + xlim(0,1) + theme(aspect.ratio=1, legend.position="bottom", plot.title = element_text(hjust = 0.5)) + scale_fill_discrete(name = "Requested mean cluster size") + xlab("Mean absolute correlation") + ggtitle("Summarize absolute correlation")
+ggplot(df_results, aes(mean_abs_corr, fill=id)) + geom_histogram(alpha=0.7) + theme_bw(17) + xlim(0,1) + 
+  theme(aspect.ratio=1, legend.position="bottom", 
+    plot.title = element_text(hjust = 0.5)) + 
+  scale_fill_discrete(name = "Requested mean cluster size") +
+   xlab("Mean absolute correlation") + 
+   ggtitle("Summarize absolute correlation")
 
 # Boxplot of number of features per cluster
 df_results$id = factor(df_results$id, sort(as.numeric(unique(df_results$id))))
-ggplot(df_results, aes(id, N, fill=id)) + geom_boxplot() + theme_bw(17) + theme(aspect.ratio=1, legend.position="bottom", plot.title = element_text(hjust = 0.5)) + scale_fill_discrete(name = "Feature per cluster") + xlab("Requested mean cluster size") + ylab("Number of features") + ggtitle("Summarize feature per cluster") + coord_flip()
+ggplot(df_results, aes(id, N, fill=id)) + 
+  geom_boxplot() + theme_bw(17) + 
+  theme(aspect.ratio=1, legend.position="bottom", 
+    plot.title = element_text(hjust = 0.5)) + 
+    scale_fill_discrete(name = "Feature per cluster") + 
+    xlab("Requested mean cluster size") + 
+    ylab("Number of features") + 
+    ggtitle("Summarize feature per cluster") + 
+    coord_flip()
 ```
 
-
-
-<!---
-### Examine top cluster
-```{r plot.clusters.best, echo=TRUE, cache=FALSE, message=FALSE, results="hide"}   
-# extract peak ID's from most significant cluster
-peakIDs = getFeaturesInCluster( treeListClusters_collapse, df$chrom[1], df$cluster[1], df$id[1])
-    
-# get location of peaks in this cluster  
-query = range(featureLocation[names(featureLocation) %in% peakIDs])
-
-# expand window to include adjacent clusters
-window = 1e5 
-start(query) = start(query) - window
-end(query) = end(query) + window
-
-library(EnsDb.Hsapiens.v75)      
-ensdb = EnsDb.Hsapiens.v75
-   
-# Plot peaks in the query region
-
-locText = with( data.frame(query), paste0(seqnames, ':', format(start, big.mark=','), '-', format(end, big.mark=',')))
-
-main = paste0(df$chrom[1], ': cluster ', df$cluster[1], '\n', locText)
-
-plotDecorate( ensdb, treeList, treeListClusters_collapse, featureLocation, query, showGenes=TRUE) + ggtitle(main)
-```
---->
-
-### Compare correlation structure along genome
-First, plot correlation structure for controls (metadata\$Disease==0).  Then, plot correlation structure for cases (metadata\$Disease==1).
-
-The cluster located at `r locText` has a p-value of `r format(df_results$pValue[1], digits=4)` and a test statistic of `r format(df_results$stat[1], digits=3)`.  The negative sign indicates a loss of correlation in the test set (i.e. Disease==1) compared to the baseline correlation in controls (i.e. Dissease==0)
-
+### Compare correlation structure along genome for top clusters
 ```{r plot2Decorate.query, fig.width=15, message=FALSE, results="hide", echo=FALSE}
-library(EnsDb.Hsapiens.v75) 
-detach('package:EnsDb.Hsapiens.v75', unload=TRUE)
-library(EnsDb.Hsapiens.v75)      
-ensdb = EnsDb.Hsapiens.v75
-
-figlist = lapply(1:50, function(i){
+figlist = lapply(1:20, function(i){
         
   # extract peak ID's from most significant cluster
   peakIDs = getFeaturesInCluster( treeListClusters_collapse, df$chrom[i], df$cluster[i], df$id[i] )
@@ -269,15 +243,13 @@ figlist = lapply(1:50, function(i){
   window = 100000 
   start(query) = start(query) - window
   end(query) = end(query) + window
-  pdf("test.pdf", width=15)
+  # pdf("test.pdf", width=15)
 
   fig1 = plotDecorate( ensdb, treeList, treeListClusters_collapse, featureLocation, query, data=residValues[,metadata$Dx=='Control'])
 
   fig2 = plotDecorate( ensdb, treeList, treeListClusters_collapse, featureLocation, query, data=residValues[,metadata$Dx=='Schizo'])
   plot_grid( fig1, fig2, ncol=2, labels=c('A: Contols (i.e. Disease==0)', 'B: Cases (i.e. Disease==1)') )  
-  dev.off()
-
-
+  # dev.off()
 })
 figlist 
 ```
@@ -288,7 +260,10 @@ plotScatterPairs( residValues, peakIDs, metadata$Dx) + ggtitle(main)
 ```
 
 ### Compare top cluster between cases and controls
-```{r plot.results, cache=FALSE, fig.width=12, fig.height=12}    
+```{r plot.results, cache=FALSE, fig.width=12, fig.height=12}   
+i = 1
+peakIDs = getFeaturesInCluster( treeListClusters_collapse, df$chrom[i], df$cluster[i], df$id[i] )
+
 # plot comparison of correlation matrices for peaks in peakIDs
 #  where data is subset by metadata$Disease
 main = paste0(df$chrom[1], ': cluster ', df$cluster[1])     
@@ -300,7 +275,7 @@ plotCompareCorr( residValues, peakIDs, metadata$Dx) + ggtitle(main)
 topTable(fit, coef='DxSchizo', number=Inf)[peakIDs,]
 ```
 
-
+# Save results
 ```{r save.significant.clusters}
 loc = '/sc/orga/projects/psychencode/gabriel/decorate_analysis/bed/'
 
@@ -329,7 +304,6 @@ idx = which(df_results$p.adjust < 0.05 & df_results$stat < 0)
 featureNames_signif = getFeaturesInClusterList( treeListClusters_collapse, chrom=df_results$chrom[idx], clustID=df_results$cluster[idx], id=df_results$id[idx])
 featureNames_signif = unique(unlist(featureNames_signif))
 rtracklayer::export.bed( featureLocation[featureNames_signif], paste0(loc, "methylSz_signif_down.bed"))
-
 ```
 
 

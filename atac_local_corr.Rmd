@@ -1,7 +1,7 @@
 
 ---
 title: "decorate: Local correlation analysis of ATAC-seq"
-subtitle: 'Data from ATAC-seq from post mortem brain from [Bryois, et al. (2018)](https://www.nature.com/articles/s41467-018-05379-y) '
+subtitle: 'ATAC-seq from post mortem brains from [Bryois, et al. (2018)](https://www.nature.com/articles/s41467-018-05379-y) '
 author: "Developed by [Gabriel Hoffman](http://gabrielhoffman.github.io/)"
 date: "Run on `r Sys.Date()`"
 documentclass: article
@@ -35,14 +35,6 @@ rmarkdown::render("/hpc/users/hoffmg01/scripts/decorate_analysis/atac_local_corr
 
 --->
 
-
-
-
-# Goal: Differential correlation analysis on epigenomic data
-### 1) Evaluate local correlations
-### 2) Identify blocks of correlated peaks
-### 3) Compare correlations between cases and controls
-
 Data is available from [Synapse](https://www.synapse.org//#!Synapse:syn2759792/wiki/69613)
 
 ```{r load.packages, echo=TRUE, message=FALSE, results='hide'}
@@ -55,7 +47,7 @@ suppressPackageStartupMessages(library(GenomicRanges))
 options(xtable.type="html")
 
 knitr::opts_chunk$set(
-  echo=FALSE,
+  echo=TRUE,
   warning=FALSE,
   message=TRUE,
   error = FALSE,
@@ -68,7 +60,7 @@ knitr::opts_chunk$set(
 options(markdown.HTML.stylesheet = 'css/custom.css')
 ```
 
-```{r load.always, cache=FALSE, echo=FALSE, message=FALSE}
+```{r load.always, cache=FALSE, echo=TRUE, message=FALSE}
 suppressPackageStartupMessages(library(doParallel))
 suppressPackageStartupMessages(library(BiocParallel))
 suppressPackageStartupMessages(library(synapser))
@@ -81,20 +73,16 @@ synLogin()
 ```{r download, echo=TRUE}
 # chip-Seq counts
 chipCounts = read.table( synGet('syn17061266')$path, header=TRUE, stringsAsFactors=FALSE, sep='\t', row.names=1)
-# chipCounts = read.table( 'data/ATACSEQ_COUNT_MATRIX.tsv', header=TRUE, stringsAsFactors=FALSE, sep='\t', row.names=1)
 
 # # peak locations
 peakLocs_in = fread( synGet('syn17061264')$path )
-# peakLocs_in = fread( 'data/ATACSEQ_CONSENSUS_PEAKS.bed' )
 peakLocs = with(peakLocs_in, GRanges(V1, IRanges(V2, V3, names=V4)))
 ```
 
 ```{r metadata}
 meta_clinical = fread( synGet('syn17943350')$path )
-# meta_atac = fread( synGet('syn17943186')$path )
 
-# meta_clinical = fread( 'data/CMC_clinical_working.csv')
-meta_atac = fread( '/sc/orga/projects/psychencode/gabriel/decorate_analysis/data/CMC_Human_DLPFC_ATACSeq.csv')
+meta_atac = fread( synGet('syn20780661')$path )
 
 metaData = merge( meta_atac, meta_clinical, by.x='Individual_ID', by.y='Individual ID')
 
@@ -124,11 +112,11 @@ design = model.matrix( ~ as.character(`ATACSeq_report:Sequencing_Order_ID`) +
 `PMI (in hours)` + Sex , metaData)
 vobj = voom( countObj, design, plot=TRUE)
  
-identical( names(peakLocs2), rownames(vobj))
+# identical( names(peakLocs2), rownames(vobj))
 ```
 
 # PCA on normalized ATAC-seeq
-```{r pca}
+```{r pca, echo=TRUE}
 dcmp = svd(vobj$E, nv=5, nu=0)
 frac = dcmp$d^2 / sum(dcmp$d^2) * 100
 xlab = paste0('PC1: ', round(frac[1], 1), '%')
@@ -150,6 +138,7 @@ ylab = paste0('PC2: ', round(frac[2], 1), '%')
 plot(dcmp$v[,1], dcmp$v[,2], xlab=xlab, ylab=ylab,main="After regressing out 2 PC's")
 ```
 
+# Compute residuals to remove effect of confounders
 ```{r voom.again}
 vobj2 = voom( countObj, dsgn, plot=TRUE) 
 fitPC2 = lmFit(vobj2, dsgn)
@@ -172,21 +161,27 @@ topTable(fitDE, coef='DxSCZ')
 ```
 
 # Learn local correlation structure
+Here, clutsers are learned from controls only, so we didnt need to residualize out the case/control effect
 ```{r hclustering, message=FALSE, echo=TRUE, results="hide"} 
 # Compute correlation and hierarchical clustering on controls
-treeList = runOrderedClusteringGenome( quantResid2[,metaData$Dx=='Control'], peakLocs2 )       
+treeList = runOrderedClusteringGenome( quantResid2[,metaData$Dx=='Control'], peakLocs2, quiet=TRUE )       
 ```
 
 
 # Evaluate correlation structure versus distance
-```{r plot.corr.decay}
+## Original data
+```{r plot.corr.decay, message=FALSE, fig.height=5}
 # decay in original data
-treeListOriginal = runOrderedClusteringGenome( vobj$E[,metaData$Dx=='Control'], peakLocs2 )   
-dfDistOriginal = evaluateCorrDecay( treeListOriginal, peakLocs2, "chr22" )
+treeListOriginal = runOrderedClusteringGenome( vobj$E[,metaData$Dx=='Control'], peakLocs2, quiet=TRUE )   
+dfDistOriginal = evaluateCorrDecay( treeListOriginal, peakLocs2, "chr22", verbose=FALSE )
 plotCorrDecay( dfDistOriginal, method="R", xlim=c(500, 1e7) )
-   
+```
+
+## Residuals
+Notice much lower correlation between distant features after residualizing
+```{r plot.corr.decay.resid, message=FALSE, fig.height=5}
 # decay in residuals
-dfDist = evaluateCorrDecay( treeList, peakLocs2, "chr22" )
+dfDist = evaluateCorrDecay( treeList, peakLocs2, "chr22", verbose=FALSE )
 plotCorrDecay( dfDist, method="R", xlim=c(500, 1e7) )
 ```
 
@@ -202,7 +197,7 @@ n_clusters = countClusters( treeListClusters )
 clstScore = scoreClusters(treeList, treeListClusters, BPPARAM=SerialParam() )
 ```
 
-
+# Histogram of LEF values
 ```{r hist.LEF}
 df_LEF = lapply(clstScore, function(x){
  with(x, data.frame(id, N, chrom, cluster, LEF))
@@ -210,7 +205,7 @@ df_LEF = lapply(clstScore, function(x){
 df_LEF = do.call('rbind', df_LEF )
 df_LEF$id = factor(df_LEF$id, sort(unique(df_LEF$id)))
 
-ggplot(df_LEF, aes(LEF, color=id)) + geom_density() + theme_bw(17) + theme(aspect.ratio=1)
+ggplot(df_LEF, aes(LEF, color=id)) + geom_density() + theme_bw(17) + theme(aspect.ratio=1) + xlim(0,1)
 ```
 
 # Filter clusters based on strength of correlation
@@ -227,22 +222,8 @@ treeListClusters_filter = filterClusters( treeListClusters, clustInclude )
 treeListClusters_collapse = collapseClusters( treeListClusters_filter, peakLocs2 )    
 ```
 
-<!---
-# Plot chr20
-```{r plot.clusters, echo=TRUE, message=FALSE, results="hide"}  
-library(EnsDb.Hsapiens.v86)      
-ensdb = EnsDb.Hsapiens.v86
-
-clusterValues = treeListClusters_collapse[['chr20']]
- 
-query = range(peakLocs2[seqnames(peakLocs2) == "chr20"])
-     
-plotDecorate( ensdb, treeList, treeListClusters_collapse, peakLocs2, query, showGenes=FALSE)
-```
---->
-
 # Test differential signal
-```{r sled, echo=TRUE, message=FALSE, results="hide"}
+```{r sled, echo=TRUE, message=FALSE}
 # get total number of clusters
 n_clusters = countClusters( treeListClusters_collapse )
 
@@ -251,7 +232,8 @@ param = SnowParam(6, "SOCK", progressbar=TRUE)
 
 ecdBox = evalDiffCorr( quantResid2, metaData$Dx, peakLocs2, treeListClusters_collapse, BPPARAM=param, method="Box.permute" )
 
-ecdSLE = evalDiffCorr( quantResid2, metaData$Dx, peakLocs2, treeListClusters_collapse, BPPARAM=param, method="deltaSLE" )
+# Run deltaSLE test 
+# ecdSLE = evalDiffCorr( quantResid2, metaData$Dx, peakLocs2, treeListClusters_collapse, BPPARAM=param, method="deltaSLE" )
 
 # get summary of results
 df = summary( ecdBox )
@@ -265,7 +247,7 @@ head(df)
 ```
 
 ### Examine top cluster
-```{r plot.clusters.best, echo=TRUE, cache=FALSE, message=FALSE, results="hide"}   
+```{r plot.clusters.best, echo=TRUE, cache=FALSE, message=FALSE}   
 # extract peak ID's from most significant cluster
 peakIDs = getFeaturesInCluster( treeListClusters_collapse, df$chrom[1], df$cluster[1], df$id[1])
     
@@ -299,7 +281,7 @@ topTable(fitDE, coef='DxSCZ', number=Inf)[peakIDs,]
 ```
 
 
-```{r multiple plots}
+```{r combine.results}
 df_results = combineResults( ecdBox, clstScore, treeListClusters, peakLocs2)
 head(df_results)
 ```

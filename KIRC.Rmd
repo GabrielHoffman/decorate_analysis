@@ -1,6 +1,6 @@
 
 ---
-title: "Analysis of TCGA KIRC DNA methylation"
+title: "Analysis of DNA methylation from Kidney Renal Clear Cell Carcinoma (TCGA-KIRC)"
 subtitle: 'Data from [TCGA KIRC](https://portal.gdc.cancer.gov/repository?facetTab=cases&filters=%7B%22op%22%3A%22and%22%2C%22content%22%3A%5B%7B%22op%22%3A%22in%22%2C%22content%22%3A%7B%22field%22%3A%22cases.project.project_id%22%2C%22value%22%3A%5B%22TCGA-KIRC%22%5D%7D%7D%2C%7B%22op%22%3A%22in%22%2C%22content%22%3A%7B%22field%22%3A%22files.experimental_strategy%22%2C%22value%22%3A%5B%22Methylation%20Array%22%5D%7D%7D%5D%7D&searchTableTab=cases)'
 author: "Developed by [Gabriel Hoffman](http://gabrielhoffman.github.io/)"
 date: "Run on `r Sys.Date()`"
@@ -32,6 +32,8 @@ rmarkdown::render("/hpc/users/hoffmg01/scripts/decorate_analysis/KIRC.Rmd", outp
 
 --->
 
+The data files are to big (18Gb) to repost, but they can be find oun the TGCA Genomic Data Commons [here](https://portal.gdc.cancer.gov/repository?facetTab=cases&filters=%7B%22op%22%3A%22and%22%2C%22content%22%3A%5B%7B%22op%22%3A%22in%22%2C%22content%22%3A%7B%22field%22%3A%22cases.project.project_id%22%2C%22value%22%3A%5B%22TCGA-KIRC%22%5D%7D%7D%2C%7B%22op%22%3A%22in%22%2C%22content%22%3A%7B%22field%22%3A%22files.experimental_strategy%22%2C%22value%22%3A%5B%22Methylation%20Array%22%5D%7D%7D%5D%7D&searchTableTab=cases)
+
 
 ```{r load.packages, echo=FALSE, message=FALSE, results='hide'}
 suppressPackageStartupMessages(library(knitr))
@@ -50,7 +52,7 @@ suppressPackageStartupMessages(library(qvalue))
 options(xtable.type="html")
 
 knitr::opts_chunk$set(
-  echo=FALSE,
+  echo=TRUE,
   warning=FALSE,
   message=TRUE,
   error = FALSE,
@@ -63,14 +65,26 @@ knitr::opts_chunk$set(
 options(markdown.HTML.stylesheet = 'css/custom.css')
 ```
 
+```{r, echo=TRUE }
+# load gene locations
+# this is ENSEMBL v86 from the hg38 assembly
+# but other versions and assemblies are available
+library(EnsDb.Hsapiens.v86)
+```
+
+```{r reload, cache=FALSE, echo=FALSE}
+detach('package:EnsDb.Hsapiens.v86', unload=TRUE)
+library(EnsDb.Hsapiens.v86)      
+ensdb = EnsDb.Hsapiens.v86
+folder = "/sc/orga/projects/psychencode/resources/gdc/KIRC_methylation"
+```
+
+
 ```{r load.always, cache=FALSE, echo=FALSE, message=FALSE}
 register(SnowParam(4, "SOCK"))
 ```
 
 ```{r load.data}
-
-folder = "/sc/orga/projects/psychencode/resources/gdc/KIRC_methylation"
-
 # Illumina Methylation 450K data
 files = list.files(folder, pattern="*.gdc_hg38.txt.gz", recursive=TRUE, full.names=TRUE)
 
@@ -160,10 +174,10 @@ colnames(methylData) = sapply(strsplit(colnames(methylData), '-'), function(x) p
 
 # sample metadata
 info = fread(paste0(folder, "/metadata/sample.tsv"), sep="\t")
-table(info$sample_type)
+# table(info$sample_type)
 info = info[sample_type %in% c('Primary Tumor', 'Solid Tissue Normal') & !is.na(sample_type),]
 info$sample_type = factor(info$sample_type , c('Solid Tissue Normal', 'Primary Tumor'))
-any(is.na(info$sample_type))
+# any(is.na(info$sample_type))
 
 # reorder info based on methylData
 ids = intersect(colnames(methylData), info$sample_submitter_id)
@@ -171,7 +185,7 @@ ids = intersect(colnames(methylData), info$sample_submitter_id)
 info = droplevels(info[match(ids, sample_submitter_id),])
 methylData = methylData[,match(ids, colnames(methylData)),]
 
-identical( info$sample_submitter_id, colnames(methylData))
+# identical( info$sample_submitter_id, colnames(methylData))
 ```
 
 # Compute residuals
@@ -192,7 +206,7 @@ methylDataResiduals = residuals( fitFull, methylData) + coef(fitFull)[,'DiseaseP
 design = model.matrix(~ ., data.frame(Disease = info$sample_type))
 fitTest = lmFit( methylData, design)
 fitTest = eBayes(fitTest)
-
+```
 
 ```{r plot.pca}
 df = data.frame(info, dcmp$v[,1:20])
@@ -202,31 +216,25 @@ ggplot(df, aes(PC1, PC2, color=sample_type)) + geom_point() + theme_bw(17) + the
 dcmpResid = svd( t(scale(t(methylDataResiduals))), nu=2, nv=2)
 colnames(dcmpResid$v) = paste0("PC", 1:ncol(dcmpResid$v))
 
-df = data.frame(info, dcmpResid$v[,1:2])
-ggplot(df, aes(PC1, PC2, color=sample_type)) + geom_point() + theme_bw(17) + theme(aspect.ratio=1, plot.title = element_text(hjust = 0.5)) + ggtitle("Residuals")
-rm(dcmpResid)
-```
-
-```{r differential.analysis}
-resDE = topTable(fitFull, coef="DiseasePrimary Tumor", number=Inf)
-table(resDE$adj.P.Val < 0.05)
+# df = data.frame(info, dcmpResid$v[,1:2])
+# ggplot(df, aes(PC1, PC2, color=sample_type)) + geom_point() + theme_bw(17) + theme(aspect.ratio=1, plot.title = element_text(hjust = 0.5)) + ggtitle("Residuals")
+# rm(dcmpResid)
 ```
 
 # Learn local correlation structure
-```{r hclustering, message=FALSE, echo=TRUE, results="hide"} 
+```{r hclustering, message=FALSE, echo=TRUE} 
 # Compute correlation and hierarchical clustering on controls
-treeList = runOrderedClusteringGenome( methylDataResiduals[,which(info$sample_type=='Primary Tumor')], probeInfo, method.corr="spearman" )      
+treeList = runOrderedClusteringGenome( methylDataResiduals[,which(info$sample_type=='Primary Tumor')], probeInfo, method.corr="spearman", quiet=TRUE )      
 ```
 
 # Evaluate correlation structure versus distance
-```{r plot.corr.decay}
-dfDist = evaluateCorrDecay( treeList, probeInfo, "chr22" )
+```{r plot.corr.decay, message=FALSE}
+dfDist = evaluateCorrDecay( treeList, probeInfo, "chr22", verbose=FALSE )
   
 plotCorrDecay( dfDist, outlierQuantile=1e-5 )
 ```
 
-# Create clusters and then
-# Measure strength of correlation structure in each cluster
+# Create clusters and then measure strength of correlation structure in each cluster
 ```{r scoreClusters, echo=TRUE, message=FALSE}
 treeListClusters = createClusters( treeList, method='meanClusterSize', meanClusterSize=c( 5, 10, 20, 30, 40, 50, 100, 200, 500) )
 
@@ -329,17 +337,9 @@ query = range(probeInfo[names(probeInfo) %in% probeIDs])
 window = 1e5 
 start(query) = start(query) - window
 end(query) = end(query) + window
-
-library(EnsDb.Hsapiens.v86)      
-ensdb = EnsDb.Hsapiens.v86
    
 # Plot peaks in the query region
-
 locText = with( data.frame(query), paste0(seqnames, ':', format(start, big.mark=','), '-', format(end, big.mark=',')))
-
-main = paste0(df$chrom[idx], ': cluster ', df$cluster[idx], '\n', locText)
-
-plotDecorate( ensdb, treeList, treeListClusters_collapse, probeInfo, query, showGenes=TRUE) + ggtitle(main)
 ```
 
 
@@ -348,11 +348,7 @@ First, plot correlation structure for controls (metadata\$Disease==0).  Then, pl
 
 The cluster located at `r locText` has a p-value of `r format(df_results$pValue[idx], digits=4)` and a test statistic of `r format(df_results$stat[idx], digits=3)`.  The negative sign indicates a loss of correlation in the test set (i.e. Disease==1) compared to the baseline correlation in controls (i.e. Dissease==0)
 
-```{r plot2Decorate.query, fig.width=15, message=FALSE, results="hide", echo=FALSE, cache=FALSE}
-detach("package:EnsDb.Hsapiens.v86", unload=TRUE)
-library(EnsDb.Hsapiens.v86)      
-ensdb = EnsDb.Hsapiens.v86
-      
+```{r plot2Decorate.query, fig.width=15, message=FALSE, echo=TRUE}      
 # get location of peaks in this cluster  
 query = range(probeInfo[names(probeInfo) %in% probeIDs])
 
@@ -368,18 +364,14 @@ plot_grid( fig1, fig2, ncol=2, labels=c('A: Solid Tissue Normal', 'B: Primary Tu
 ```
 
 ### Pairwise scatter plots
-```{r scatter, echo=TRUE, message=FALSE, cache=FALSE}
+```{r scatter, echo=TRUE, message=FALSE, cache=FALSE, fig.width=10}
 
 ids = c('cg00674706', 'cg13641185')
-# ids = c('cg14665716', 'cg15787284')
-# ids = c('cg15787284', 'cg20744304')
-# ids = probeIDs
 
 C1 = cor(t(methylData[ids,info$sample_type==levels(info$sample_type)[1]]), method="sp")
 C2 = cor(t(methylData[ids,info$sample_type==levels(info$sample_type)[2]]), method="sp")
-C1 - C2
-# plot delta corr, vs magnatude
 
+# plot delta corr, vs magnatude
 plotScatterPairs( methylData, ids, info$sample_type) + ggtitle(main)
 
 # compare magnitude between cases and controls
@@ -401,11 +393,7 @@ plotCompareCorr( methylDataResiduals, probeIDs, info$sample_type) + ggtitle(main
 
 # Highlight two significant regions
 ## UBD
-```{r plot2Decorate.UBD, fig.width=15, message=FALSE, results="hide", echo=FALSE, cache=FALSE}
-detach("package:EnsDb.Hsapiens.v86", unload=TRUE)
-library(EnsDb.Hsapiens.v86)      
-ensdb = EnsDb.Hsapiens.v86
-      
+```{r plot2Decorate.UBD, fig.width=15, message=FALSE, results="hide", echo=FALSE, cache=FALSE}      
 # UBD
 gr = genes(ensdb, filter = ~ gene_name == "UBD" & seq_name == '6')
 seqlevelsStyle(gr) = "UCSC"
@@ -443,30 +431,9 @@ fig2 = plotDecorate( ensdb, treeList, treeListClusters_collapse, probeInfo, quer
 plot_grid( fig1, fig2, ncol=2, labels=c('A: Solid Tissue Normal', 'B: Primary Tumor') )   
 ```
 
-<!---
-```{r get.fdr}
-gr = genes(ensdb, filter = ~ gene_name == "PFKFB3")
-seqlevelsStyle(gr) = "UCSC"
-# get location of peaks in this cluster  
-query = range(gr)
-gr = probeInfo[probeInfo %within% query]
-clgr = getClusterRanges(probeInfo, treeListClusters_collapse)
-idx = findOverlap(clgr, grs)
-clustNames = unique(names(clgr[idx@from]))
-
-
-i = with(df_results, paste(id, chrom, cluster, sep='_')) %in% clustNames
-i = which(i)
-
-df_results[i,]
-
-probeIDs = getFeaturesInCluster( treeListClusters_collapse, df_results$chrom[i], as.numeric(df_results$cluster[i]), as.character(df_results$id[i]) )
---->
-
-
  
 
-```{r scatter.example2}
+```{r scatter.example2, fig.width=10}
 ids = names(probeInfo[probeInfo %within% query])
 
 C1 = cor(t(methylData[ids,info$sample_type==levels(info$sample_type)[1]]), method="sp")
@@ -474,7 +441,7 @@ C2 = cor(t(methylData[ids,info$sample_type==levels(info$sample_type)[2]]), metho
 D = abs(C1 - C2)
 
 i = which.max(apply(D, 2, max))
-sort(D[names(i),])
+# sort(D[names(i),])
 
 ids = c('cg05686026', 'cg02572278')
 
@@ -520,11 +487,6 @@ topTable(fitFull, coef="DiseasePrimary Tumor", number=Inf)[ids,]
 
 
 ```{r multiple.plot2Decorate.query, fig.width=15, message=FALSE, results="hide", echo=FALSE}
-detach("package:EnsDb.Hsapiens.v86", unload=TRUE)
-library(EnsDb.Hsapiens.v86)      
-ensdb = EnsDb.Hsapiens.v86
-
-
 plotDiseaseBox = function(pid){
 
   df = data.frame(y = methylDataResiduals[pid,], 
@@ -594,62 +556,6 @@ featureNames_signif = unique(unlist(featureNames_signif))
 rtracklayer::export.bed( probeInfo[featureNames_signif], paste0(loc, "KIRC_signif_down.bed"))
 
 ```
-
-
-
-
-
-
-
-
-<!---
-# GREAT job id: 20190906-public-4.0.4-sQmQr2
-files = dir('/Users/gabrielhoffman/Dropbox/decorate/results/KIRC', pattern='greatExportAll.*tsv$', full.names=TRUE)
-
-files = "~/Downloads/KIRC_signif_up.tsv"
-res = lapply( files, function(file){
-  read.table(file, header=TRUE, sep='\t', stringsAsFactors=FALSE)
-})
-
-dfcombine = do.call("rbind", res)[,1:10]
-
-write.table(dfcombine, "KIRC_decorate.tsv", sep="\t", quote=TRUE, row.names=FALSE)
-
-genesets = c('GO:0044212', 'transcription regulatory region DNA binding',
-'GO:0000981',  'RNA polymerase II transcription factor activity, sequence-specific DNA binding',
-'GO:0031931',  'TORC1 complex',
-'HP:0000121',  'Nephrocalcinosis',
-'HP:0000787', 'Nephrolithiasis',
-'MP:0003613',  'abnormal kidney medulla development',
-'MP:0011366',  'absent metanephros',
-'GO:0048568',  'embryonic organ development',
-'GO:0048598', 'embryonic morphogenesis')
-genesets = matrix(genesets, ncol=2, byrow=TRUE)
-
-df = dfcombine[dfcombine$ID %in% genesets[,1],]
-df = df[df$Ontology != 'Mouse Phenotype Single KO',]
-
-df = df[match(genesets[,2], df$Desc),]
-
-df$Desc = factor(df$Desc, df$Desc)
-
-library(ggplot2)
-
-fig = ggplot(df, aes(Desc, -log10(HyperFdrQ))) + geom_bar(stat='identity', fill="navy") + coord_flip() + theme_bw(17) + theme(aspect.ratio=2) + ggtitle("KIRC Box.permute enrichment")
-file = '/Users/gabrielhoffman/Dropbox/decorate/results/KIRC/enrichment.pdf'
-ggsave(file, fig)
-
---->
-
-
-
-
-
-
-
-
-
-
 
 
 
