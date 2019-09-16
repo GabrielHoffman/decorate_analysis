@@ -77,7 +77,7 @@ suppressPackageStartupMessages(library(synapser))
 synLogin() 
 ```
 
-```{r, echo=TRUE }
+```{r, echo=TRUE, cache=FALSE }
 # load gene locations
 # this is ENSEMBL v75 from the hg19 assembly
 # but other versions and assemblies are available

@@ -65,7 +65,7 @@ knitr::opts_chunk$set(
 options(markdown.HTML.stylesheet = 'css/custom.css')
 ```
 
-```{r, echo=TRUE }
+```{r, echo=TRUE, cache=FALSE }
 # load gene locations
 # this is ENSEMBL v86 from the hg38 assembly
 # but other versions and assemblies are available
