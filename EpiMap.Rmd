@@ -369,6 +369,7 @@ figlist
 i = 30
 peakIDs = getFeaturesInCluster( treeListClusters_collapse, df$chrom[i], df$cluster[i], df$id[i])
       
+main = paste0(df$chrom[i], ': cluster ', df$cluster[i]) 
 plotScatterPairs( vobj$E, peakIDs, metadata$CellType) + ggtitle(main)
 ```
 

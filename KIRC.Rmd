@@ -330,6 +330,8 @@ idx = 1
 # extract peak ID's from most significant cluster
 probeIDs = getFeaturesInCluster( treeListClusters_collapse, df$chrom[idx], df$cluster[idx], df$id[idx])
     
+main = paste(df$id[idx], df$chrom[idx], df$cluster[idx], sep=' ')
+
 # get location of peaks in this cluster  
 query = range(probeInfo[names(probeInfo) %in% probeIDs])
 
@@ -372,7 +374,7 @@ C1 = cor(t(methylData[ids,info$sample_type==levels(info$sample_type)[1]]), metho
 C2 = cor(t(methylData[ids,info$sample_type==levels(info$sample_type)[2]]), method="sp")
 
 # plot delta corr, vs magnatude
-plotScatterPairs( methylData, ids, info$sample_type) + ggtitle(main)
+plotScatterPairs( methylData, ids, info$sample_type) + ggtitle(paste(ids, collapse=', '))
 
 # compare magnitude between cases and controls
 topTable(fitFull, coef="DiseasePrimary Tumor", number=Inf)[ids,]
@@ -525,7 +527,7 @@ dev.off()
 
 ```
  
-
+# Save results
 ```{r save.significant.clusters}
 loc = '/sc/orga/projects/psychencode/gabriel/decorate_analysis/bed/'
 
