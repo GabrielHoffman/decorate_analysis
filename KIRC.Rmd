@@ -475,18 +475,9 @@ topTable(fitFull, coef="DiseasePrimary Tumor", number=Inf)[ids,]
 ```
 
 
-
-<!---
-# Examine differential accessability signal for these peaks
-```{r DE_peaks, echo=TRUE}
-# design = model.matrix(~sample_type, info)
-# fit = lmFit( methylDataResiduals, design)
-# fit = eBayes(fit)
-
-# topTable(fit, coef='DxSchizo', number=Inf)[probeIDs,]
+```{r differential.analysis}    
+resDE = topTable(fitFull, coef="DiseasePrimary Tumor", number=Inf)   
 ```
---->
-
 
 ```{r multiple.plot2Decorate.query, fig.width=15, message=FALSE, results="hide", echo=FALSE}
 plotDiseaseBox = function(pid){
