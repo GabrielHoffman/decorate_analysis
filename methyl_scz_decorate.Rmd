@@ -256,17 +256,18 @@ figlist
 
 ### Pairwise scatter plots
 ```{r scatter, echo=TRUE, message=FALSE}
+i = 1
+peakIDs = getFeaturesInCluster( treeListClusters_collapse, df$chrom[i], df$cluster[i], df$id[i] )
+
+main = paste0(df$chrom[1], ': cluster ', df$cluster[1])  
+
 plotScatterPairs( residValues, peakIDs, metadata$Dx) + ggtitle(main)
 ```
 
 ### Compare top cluster between cases and controls
 ```{r plot.results, cache=FALSE, fig.width=12, fig.height=12}   
-i = 1
-peakIDs = getFeaturesInCluster( treeListClusters_collapse, df$chrom[i], df$cluster[i], df$id[i] )
-
 # plot comparison of correlation matrices for peaks in peakIDs
-#  where data is subset by metadata$Disease
-main = paste0(df$chrom[1], ': cluster ', df$cluster[1])     
+#  where data is subset by metadata$Disease   
 plotCompareCorr( residValues, peakIDs, metadata$Dx) + ggtitle(main)    
 ```
 
