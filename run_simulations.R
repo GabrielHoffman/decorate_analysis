@@ -71,19 +71,23 @@ for( n_samples in unique(sim_params$n_samples) ){
 
 # ggplot(prRes[!is.na(prRes$AUPR),], aes(diffCorrScale, AUPR, fill=diffCorrScale)) + geom_bar(stat="identity") + theme_bw(17) + theme(aspect.ratio=1) + facet_wrap( ~ beta_disease + useResid)
 
-n_samples = 500
+n_samples = 100
 
 ncol = length(unique(sim_params$beta_confounding))
 
-df = prRes[!is.na(prRes$AUPR)&(prRes$n_samples==n_samples),]
-ggplot(df, aes(diffCorrScale, AUPR, color=useResid)) + geom_point() + geom_line() + theme_bw(12) + theme(aspect.ratio=1) + facet_wrap( ~ rho + beta_confounding, ncol=ncol ) + xlab("Effect size") + geom_hline(yintercept=0.5, linetype="dashed") + ylim(0, 1)
+df = prRes[!is.na(prRes$AUPR),]
+
+ggplot(df, aes(diffCorrScale, AUPR, color=useResid)) + geom_point() + geom_line() + theme_bw(12) + theme(aspect.ratio=1) + facet_wrap( ~ n_samples + beta_confounding, ncol=ncol ) + xlab("Effect size") + geom_hline(yintercept=0.5, linetype="dashed") + ylim(0, 1) + ggtitle("AUPR vs diffCorrScale")
 
 
 
 ncol = length(unique(sim_params$diffCorrScale)) - 1
 
-df = prRes[!is.na(prRes$AUPR)&(prRes$n_samples==n_samples),]
-ggplot(df, aes(beta_confounding, AUPR, color=useResid)) + geom_point() + geom_line() + theme_bw(12) + theme(aspect.ratio=1) + xlab("Effect size of confounding factor") + geom_hline(yintercept=0.5, linetype="dashed") + ylim(0, 1) + facet_wrap( ~ rho + diffCorrScale, ncol=ncol)
+# df = prRes[!is.na(prRes$AUPR)&(prRes$n_samples==n_samples),]
+df = prRes[!is.na(prRes$AUPR),]
+
+ggplot(df, aes(beta_confounding, AUPR, color=useResid)) + geom_point() + geom_line() + theme_bw(12) + theme(aspect.ratio=1) + xlab("Effect size of confounding factor") + geom_hline(yintercept=0.5, linetype="dashed") + ylim(0, 1) + facet_wrap( ~ n_samples + diffCorrScale, ncol=ncol) + ggtitle("AUPR vs effect of confounder")
+
 
 
 
