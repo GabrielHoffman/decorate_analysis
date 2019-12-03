@@ -182,7 +182,7 @@ sim_params = expand.grid( 	useResid 		= c(TRUE, FALSE),
 							n_samples 		= c(100, 200),
 							rho 			= c(.9), 
 							beta_disease 	= c(0),
-							beta_confounding= c(0, .05, .1, .4, .6), 
+							beta_confounding= c(0, .5, 1, 3, 5, 10), 
 							diffCorrScale 	= seq(1, 1.06, length.out=5)
 							)
 
@@ -199,7 +199,7 @@ sim_results = lapply( (idx[opt$batch]+1):idx[opt$batch+1], function(i){
 
 	# cat("\r", i, ' / ', nrow(sim_params), '   ')
 	set.seed(1)
-	
+
 	run_simulation( simLocation, sim_params, i, info, n_clusters)
 })
 
