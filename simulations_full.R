@@ -165,15 +165,15 @@ pos = seq(1, 3e7, by=3000)[1:10000]
 
 simLocation = GRanges("chr1", IRanges(pos, pos+1, names=paste0('peak_', 1:length(pos))))
 
-n_clusters = 1000
+n_clusters = 2000
 n_features_per_cluster = length(simLocation) / n_clusters
 n_features_per_cluster
 
-sim_params = expand.grid( 	n_samples 	= c(100),
+sim_params = expand.grid( 	n_samples 	= c(100, 200),
 							rho 			= c(.9), 
 							beta_disease 	= c(0),
 							beta_confounding= c(0, 1,5, 10), 
-							diffCorrScale 	= seq(1, 1.08, length.out=5),
+							diffCorrScale 	= seq(1, 1.06, length.out=5),
 							useResid 		= c(TRUE, FALSE))
 
 sim_params = unique(sim_params)

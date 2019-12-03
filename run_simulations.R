@@ -4,12 +4,12 @@
 
 cd /hpc/users/hoffmg01/work/decorate/
 
-/hpc/users/hoffmg01/build2/decorate_analysis/run_simulations.R --nbatches 30 --batch 1 --prefix /hpc/users/hoffmg01/work/decorate/decorate
+# /hpc/users/hoffmg01/build2/decorate_analysis/simulations_full.R --nbatches 30 --batch 1 --prefix /hpc/users/hoffmg01/work/decorate/decorate
 
 ml openssl udunits proj gdal geos
 NBATCHES=60
 export OMP_NUM_THREADS=1
-seq 1 $NBATCHES | parallel -P60 /hpc/users/hoffmg01/scripts/decorate_analysis/run_simulations.R --nbatches $NBATCHES --batch {} --prefix /hpc/users/hoffmg01/work/decorate/decorate
+seq 1 $NBATCHES | parallel -P60 /hpc/users/hoffmg01/build2/decorate_analysis/simulations_full.R --nbatches $NBATCHES --batch {} --prefix /hpc/users/hoffmg01/work/decorate/decorate
 
 # sklar5
 
