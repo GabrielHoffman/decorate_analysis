@@ -9,7 +9,7 @@ cd /hpc/users/hoffmg01/work/decorate/
 ml openssl udunits proj gdal geos
 NBATCHES=60
 export OMP_NUM_THREADS=1
-seq 1 $NBATCHES | parallel -P60 /hpc/users/hoffmg01/build2/decorate_analysis/simulations_full.R --nbatches $NBATCHES --batch {} --prefix /hpc/users/hoffmg01/work/decorate/decorate
+seq 1 $NBATCHES | parallel -P40 /hpc/users/hoffmg01/build2/decorate_analysis/simulations_full.R --nbatches $NBATCHES --batch {} --prefix /hpc/users/hoffmg01/work/decorate/decorate
 
 # sklar5
 
@@ -71,7 +71,6 @@ for( n_samples in unique(sim_params$n_samples) ){
 
 # ggplot(prRes[!is.na(prRes$AUPR),], aes(diffCorrScale, AUPR, fill=diffCorrScale)) + geom_bar(stat="identity") + theme_bw(17) + theme(aspect.ratio=1) + facet_wrap( ~ beta_disease + useResid)
 
-n_samples = 100
 
 ncol = length(unique(sim_params$beta_confounding))
 

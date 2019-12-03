@@ -16,12 +16,13 @@ suppressPackageStartupMessages(library(limma)     )
 suppressPackageStartupMessages(library(data.table)  )  
 suppressPackageStartupMessages(library(PRROC)   )    
 suppressPackageStartupMessages(library(mvtnorm) )
-# library(EnsDb.Hsapiens.v86)    
 suppressPackageStartupMessages(library(BiocParallel))
 # register(SnowParam(4, progressbar=TRUE))
 register(SerialParam(progressbar=TRUE))
 
 set.seed(1)
+
+# library(EnsDb.Hsapiens.v86)    
 # ensdb = EnsDb.Hsapiens.v86
 
 # autocorrelation decaying with distance
@@ -40,7 +41,7 @@ autocorr.mat <- function(gr, rho = 0.5, s=10) {
 }
 
 # simulate features
-simulate_features = function(gr, rho, s, info, beta_disease, beta_confounding, n_clusters, diffCorrScale=1 ){
+simulate_features = function(gr, rho, s, info, beta_disease, beta_confounding, n_clusters, diffCorrScale=1){
 
 	n_features = floor(length(gr) / n_clusters)
 
@@ -53,6 +54,7 @@ simulate_features = function(gr, rho, s, info, beta_disease, beta_confounding, n
 		# simulate autocorrelation matrix
 		C1 = autocorr.mat(gr[idx], rho, s)
 		if( diffCorrScale == 1){
+			C2 = autocorr.mat(gr[idx], rho*diffCorrScale, s)
 			C2 = C1
 		}else{
 			C2 = autocorr.mat(gr[idx], rho*diffCorrScale, s)
@@ -88,7 +90,7 @@ run_simulation = function( simLocation, sim_params, i, info, n_clusters){
 		beta_disease		= sim_params$beta_disease[i], 
 		beta_confounding 	= sim_params$beta_confounding[i],
 		n_clusters 			= n_clusters,
-		 diffCorrScale		= sim_params$diffCorrScale[i])
+		diffCorrScale		= sim_params$diffCorrScale[i])
 
 	# cor(t(epiData[,info$Disease==1]))[1:4, 1:4]
 	# cor(t(epiData[,info$Disease==2]))[1:4, 1:4]
@@ -101,7 +103,9 @@ run_simulation = function( simLocation, sim_params, i, info, n_clusters){
 		fit = lmFit(epiData, design)
 		residValues = residuals( fit, epiData)
 	}else{
-		residValues = epiData
+		design = model.matrix(~ 1, info)
+		fit = lmFit(epiData, design)
+		residValues = residuals( fit, epiData)
 	}
 
 	# compute mean R^2 value of variables
@@ -116,7 +120,7 @@ run_simulation = function( simLocation, sim_params, i, info, n_clusters){
 	# plotCorrDecay( dfDist, outlierQuantile=1e-5 )
 
 	# Clustering
-	treeListClusters = createClusters( treeList, method = "meanClusterSize", meanClusterSize=length(simLocation) / n_clusters )
+	treeListClusters = createClusters( treeList, method = "meanClusterSize", meanClusterSize=length(gr) / n_clusters )
 
 	# Evaluate strength of correlation for each cluster
 	clstScore = scoreClusters(treeList, treeListClusters )
@@ -130,23 +134,23 @@ run_simulation = function( simLocation, sim_params, i, info, n_clusters){
 	treeListClusters_filter = filterClusters( treeListClusters, clustInclude)
 
 	# # collapse redundant clusters
-	treeListClusters_collapse = collapseClusters( treeListClusters_filter, simLocation, jaccardCutoff=0.9)
+	treeListClusters_collapse = collapseClusters( treeListClusters_filter, gr, jaccardCutoff=0.9)
 
 	# Plot correlations and clusters in region defind by query
 	# get single entry giving range of the region
-	query = range(simLocation)
-	 # plotDecorate( ensdb, treeList, treeListClusters_collapse, simLocation, query)  
+	query = range(gr)
+	 # plotDecorate( ensdb, treeList, treeListClusters_collapse, gr, query)  
 
 	# Evaluate Differential Correlation between two subsets of data
 	# Use Spearman correlation to reduce the effect of outliers
-	resDiffCorr = evalDiffCorr( residValues, info$Disease, simLocation[rownames(residValues)], 
-	  treeListClusters_collapse, method='Box',  method.corr="spearman")
+	resDiffCorr = evalDiffCorr( residValues, info$Disease, gr[rownames(residValues)], treeListClusters_collapse, method='Box', method.corr="spearman")
 
 	# Summarize results
-	res = combineResults( resDiffCorr, clstScore, treeListClusters, simLocation)
+	res = combineResults( resDiffCorr, clstScore, treeListClusters, gr)
+	res = res[order(res$cluster),]
 
 	# combine results and simulation information
-	with(res, data.frame(		i 					= i,
+	with(res, data.frame(	i = i,
 	n_samples 			= nrow(info),
 	rho					= sim_params$rho[i],
 	beta_disease		= sim_params$beta_disease[i], 
@@ -156,7 +160,12 @@ run_simulation = function( simLocation, sim_params, i, info, n_clusters){
 	id, chrom, cluster, pValue, stat,N,LEF))
 }
 
+# set.seed(1)
+# res99 = run_simulation( simLocation, sim_params, 99, info, n_clusters)
+# set.seed(1)
+# res100 = run_simulation( simLocation, sim_params, 100, info, n_clusters)
 
+# plot(res99$stat, res100$stat)
 
 # Parameters for simulation
 ############################
@@ -169,12 +178,13 @@ n_clusters = 2000
 n_features_per_cluster = length(simLocation) / n_clusters
 n_features_per_cluster
 
-sim_params = expand.grid( 	n_samples 	= c(100, 200),
+sim_params = expand.grid( 	useResid 		= c(TRUE, FALSE),
+							n_samples 		= c(100, 200),
 							rho 			= c(.9), 
 							beta_disease 	= c(0),
 							beta_confounding= c(0, .05, .1, .4, .6), 
-							diffCorrScale 	= seq(1, 1.06, length.out=5),
-							useResid 		= c(TRUE, FALSE))
+							diffCorrScale 	= seq(1, 1.06, length.out=5)
+							)
 
 sim_params = unique(sim_params)
 rownames(sim_params) = 1:nrow(sim_params)
@@ -187,8 +197,9 @@ idx = floor( seq(0, nrow(sim_params), length.out=opt$nbatches+1) )
 
 sim_results = lapply( (idx[opt$batch]+1):idx[opt$batch+1], function(i){
 
-	cat("\r", i, ' / ', nrow(sim_params), '   ')
-
+	# cat("\r", i, ' / ', nrow(sim_params), '   ')
+	set.seed(1)
+	
 	run_simulation( simLocation, sim_params, i, info, n_clusters)
 })
 
