@@ -238,7 +238,7 @@ treeList = runOrderedClusteringGenome( quantResid, peakLocs2, method.corr="spear
 # decay in original data
 treeListOriginal = runOrderedClusteringGenome( vobj$E, peakLocs2, method.corr="spearman", quiet=TRUE ) 
 dfDistOriginal = evaluateCorrDecay( treeListOriginal, peakLocs2, "chr1", verbose=FALSE )
-plotCorrDecay( dfDistOriginal, method="R", xlim=c(500, 1e6) )
+plotCorrDecay( dfDistOriginal, method="Rsq", xlim=c(500, 1e6) )
 ```
 
 ## Residual data
@@ -246,7 +246,7 @@ Notice much lower correlation between distant features after residualizing
 ```{r plot.corr.decay.resid, message=FALSE}
 # decay in residuals
 dfDist = evaluateCorrDecay( treeList, peakLocs2, "chr1", verbose=FALSE )
-plotCorrDecay( dfDist, method="R", xlim=c(500, 1e6)  )
+plotCorrDecay( dfDist, method="Rsq", xlim=c(500, 1e6)  )
 ```
 
 
