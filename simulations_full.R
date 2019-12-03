@@ -182,7 +182,7 @@ sim_params = expand.grid( 	useResid 		= c(TRUE, FALSE),
 							n_samples 		= c(100, 200),
 							rho 			= c(.9), 
 							beta_disease 	= c(0),
-							beta_confounding= c(0, .5, 1, 3, 5, 10), 
+							beta_confounding= c(0, 5, 10, 50, 100), 
 							diffCorrScale 	= seq(1, 1.06, length.out=5)
 							)
 
