@@ -70,6 +70,7 @@ simulate_features = function(gr, rho, s, info, beta_disease, beta_confounding, n
 		# return X with rows as features
 		t(X + confound)
 	})
+
 	epiData = do.call("rbind", epiData)
 	rownames(epiData) = names(gr)[1:nrow(epiData)]
 	epiData
@@ -92,21 +93,25 @@ run_simulation = function( simLocation, sim_params, i, info, n_clusters){
 		n_clusters 			= n_clusters,
 		diffCorrScale		= sim_params$diffCorrScale[i])
 
-	# cor(t(epiData[,info$Disease==1]))[1:4, 1:4]
-	# cor(t(epiData[,info$Disease==2]))[1:4, 1:4]
+	# image(cor(t(epiData[1:10,info$Disease==1])))
+	# image(cor(t(epiData[1:10,info$Disease!=1])))
+	# plotCorrMatrix(cor(t(epiData[1:10,])), dendrogram='none', sort=FALSE)
+	# plotCorrMatrix(cor(t(residValues[1:10,])), dendrogram='none', sort=FALSE)
+
+	# sapply(summary(lm(t(epiData[1:10,]) ~ Disease, info)), function(fit) fit$r.squared)
+	# sapply(summary(lm(t(residValues[1:10,]) ~ Disease, info)), function(fit) fit$r.squared)
+
 
 	gr = simLocation[rownames(epiData)]
 
 	if( sim_params$useResid[i] ){
 		# Compute residuals  
 		design = model.matrix(~ Disease + Confound, info)
-		fit = lmFit(epiData, design)
-		residValues = residuals( fit, epiData)
 	}else{
 		design = model.matrix(~ 1, info)
-		fit = lmFit(epiData, design)
-		residValues = residuals( fit, epiData)
 	}
+	fit = lmFit(epiData, design)
+	residValues = residuals( fit, epiData)
 
 	# compute mean R^2 value of variables
 	# summary(lm(epiData[1,] ~ Disease + Confound,info))$r.squared
@@ -120,7 +125,7 @@ run_simulation = function( simLocation, sim_params, i, info, n_clusters){
 	# plotCorrDecay( dfDist, outlierQuantile=1e-5 )
 
 	# Clustering
-	treeListClusters = createClusters( treeList, method = "meanClusterSize", meanClusterSize=length(gr) / n_clusters )
+	treeListClusters = createClusters( treeList, method = "meanClusterSize", meanClusterSize=length(gr) / n_clusters *2)
 
 	# Evaluate strength of correlation for each cluster
 	clstScore = scoreClusters(treeList, treeListClusters )
