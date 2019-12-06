@@ -74,10 +74,10 @@ simulate_features = function(gr, rho, s, info, beta_disease, beta_confounding, n
 	epiData
 }
 
-run_simulation = function( simLocation, sim_params, i, info, n_features_per_cluster){
+run_simulation = function( simLocation, sim_params, i, info){
 	cat("job: ", i)
 
-	n_clusters = floor(length(simLocation) / n_features_per_cluster)
+	n_clusters = floor(length(simLocation) / sim_params$n_features_per_cluster[i])
 
 	info = data.frame(Disease = as.character(sample(2, sim_params$n_samples[i], replace=TRUE)), 
 		Confound = as.character(sample(2, sim_params$n_samples[i], replace=TRUE)))
@@ -162,7 +162,8 @@ run_simulation = function( simLocation, sim_params, i, info, n_features_per_clus
 	beta_confounding 	= sim_params$beta_confounding[i],
 	diffCorrScale		= sim_params$diffCorrScale[i], 
 	mean_rsq 			= mean(corrValues),
-	id, chrom, cluster, pValue, stat,N,LEF, n_features_per_cluster))
+	n_features_per_cluster	=	sim_params$n_features_per_cluster[i],
+	id, chrom, cluster, pValue, stat,N,LEF))
 }
 
 # set.seed(1)
@@ -203,7 +204,7 @@ sim_results = lapply( (idx[opt$batch]+1):idx[opt$batch+1], function(i){
 	# cat("\r", i, ' / ', nrow(sim_params), '   ')
 	set.seed(1)
 
-	run_simulation( simLocation, sim_params, i, info, n_features_per_cluster)
+	run_simulation( simLocation, sim_params, i, info)
 })
 
 # combine results
