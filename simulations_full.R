@@ -190,7 +190,7 @@ sim_params = expand.grid( 	useResid 		= c(TRUE, FALSE),
 							beta_disease 	= c(0),
 							beta_confounding= c(.01, seq(0, 1, length.out=5)[-c(1,5)]), 
 							diffCorrScale 	= seq(1, 1.06, length.out=3),
-							n_features_per_cluster = c(5, 10, 20) # c(5, 8, 10, 15, 20, 25, 30)
+							n_features_per_cluster = c(5, 20) # c(5, 8, 10, 15, 20, 25, 30)
 							)
 
 sim_params = unique(sim_params)
