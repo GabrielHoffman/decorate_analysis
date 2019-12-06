@@ -128,7 +128,7 @@ run_simulation = function( simLocation, sim_params, i, info){
 	# plotCorrDecay( dfDist, outlierQuantile=1e-5 )
 
 	# Clustering
-	treeListClusters = createClusters( treeList, method = "meanClusterSize", meanClusterSize=c(15))#length(gr) / n_clusters *2)
+	treeListClusters = createClusters( treeList, method = "meanClusterSize", meanClusterSize=c(5, 10, 15, 20, 30, 40))#length(gr) / n_clusters *2)
 
 	# Evaluate strength of correlation for each cluster
 	clstScore = scoreClusters(treeList, treeListClusters )
@@ -136,13 +136,13 @@ run_simulation = function( simLocation, sim_params, i, info){
 	# # Filter to retain only strong clusters
 	# # If lead eigen value fraction (LEF) > 30% then keep clusters
 	# # LEF is the fraction of variance explained by the first eigen-value
-	clustInclude = retainClusters( clstScore, "LEF", 0.0 )
+	clustInclude = retainClusters( clstScore, "LEF", 0.1 )
 
 	# # get retained clusters
 	treeListClusters_filter = filterClusters( treeListClusters, clustInclude)
 
 	# # collapse redundant clusters
-	treeListClusters_collapse = collapseClusters( treeListClusters_filter, gr, jaccardCutoff=0.9)
+	treeListClusters_collapse = collapseClusters( treeListClusters_filter, gr, jaccardCutoff=0.5)
 
 	# Plot correlations and clusters in region defind by query
 	# get single entry giving range of the region
