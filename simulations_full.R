@@ -53,11 +53,9 @@ simulate_features = function(gr, rho, s, info, beta_disease, beta_confounding, n
 		
 		# simulate autocorrelation matrix
 		C1 = autocorr.mat(gr[idx], rho, s)
+		C2 = autocorr.mat(gr[idx], rho*diffCorrScale, s)
 		if( diffCorrScale == 1){
-			C2 = autocorr.mat(gr[idx], rho*diffCorrScale, s)
 			C2 = C1
-		}else{
-			C2 = autocorr.mat(gr[idx], rho*diffCorrScale, s)
 		}
 
 		# simulate data based on correlation
@@ -125,7 +123,7 @@ run_simulation = function( simLocation, sim_params, i, info, n_clusters){
 	# plotCorrDecay( dfDist, outlierQuantile=1e-5 )
 
 	# Clustering
-	treeListClusters = createClusters( treeList, method = "meanClusterSize", meanClusterSize=c(5, 10, 15, 30, 40))#length(gr) / n_clusters *2)
+	treeListClusters = createClusters( treeList, method = "meanClusterSize", meanClusterSize=c(15))#length(gr) / n_clusters *2)
 
 	# Evaluate strength of correlation for each cluster
 	clstScore = scoreClusters(treeList, treeListClusters )
@@ -133,7 +131,7 @@ run_simulation = function( simLocation, sim_params, i, info, n_clusters){
 	# # Filter to retain only strong clusters
 	# # If lead eigen value fraction (LEF) > 30% then keep clusters
 	# # LEF is the fraction of variance explained by the first eigen-value
-	clustInclude = retainClusters( clstScore, "LEF", 0.1 )
+	clustInclude = retainClusters( clstScore, "LEF", 0.0 )
 
 	# # get retained clusters
 	treeListClusters_filter = filterClusters( treeListClusters, clustInclude)
