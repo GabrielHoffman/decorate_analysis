@@ -20,8 +20,6 @@ suppressPackageStartupMessages(library(BiocParallel))
 # register(SnowParam(4, progressbar=TRUE))
 register(SerialParam(progressbar=TRUE))
 
-set.seed(1)
-
 # library(EnsDb.Hsapiens.v86)    
 # ensdb = EnsDb.Hsapiens.v86
 
@@ -79,8 +77,12 @@ run_simulation = function( simLocation, sim_params, i, info){
 
 	n_clusters = floor(length(simLocation) / sim_params$n_features_per_cluster[i])
 
-	info = data.frame(Disease = as.character(sample(2, sim_params$n_samples[i], replace=TRUE)), 
-		Confound = as.character(sample(2, sim_params$n_samples[i], replace=TRUE)))
+	info = data.frame(Disease = as.character(sample(2, sim_params$n_samples[i], replace=TRUE)))
+
+	# info$Confound = as.character(sample(2, sim_params$n_samples[i], replace=TRUE))
+
+	info$Confound = scale(as.numeric(info$Disease)) + rnorm(nrow(info), sd=sqrt(sim_params$beta_confounding[i]))
+	cor(as.numeric(info$Disease), info$Confound)^2
 
 	# Simulate data
 	epiData = simulate_features(
@@ -89,7 +91,7 @@ run_simulation = function( simLocation, sim_params, i, info){
 		s 					= 1000, 
 		info 				= info, 
 		beta_disease		= sim_params$beta_disease[i], 
-		beta_confounding 	= sim_params$beta_confounding[i],
+		beta_confounding 	= 1, #sim_params$beta_confounding[i],
 		n_clusters 			= n_clusters,
 		diffCorrScale		= sim_params$diffCorrScale[i])
 
@@ -118,7 +120,7 @@ run_simulation = function( simLocation, sim_params, i, info){
 	corrValues = sapply(1:nrow(residValues), function(k) 1-cor(residValues[k,], epiData[k,])^2)
 
 	# Compute clustering
-	treeList = runOrderedClusteringGenome( residValues, gr, method.corr="spearman", quiet=TRUE )
+	treeList = runOrderedClusteringGenome( residValues, gr, method.corr="spearman", quiet=TRUE )  
 
 	# Plot Correlation vs Distance
 	# dfDist = evaluateCorrDecay( treeList, gr, verbose=FALSE)
@@ -184,8 +186,8 @@ simLocation = GRanges("chr1", IRanges(pos, pos+1, names=paste0('peak_', 1:length
 sim_params = expand.grid( 	useResid 		= c(TRUE, FALSE),
 							n_samples 		= c(100, 200),
 							rho 			= c(.9), 
-							beta_disease 	= c(0, 1,3,4,5, 10),
-							beta_confounding= c(0), 
+							beta_disease 	= c(0),
+							beta_confounding= c(.01, .5, .9), 
 							diffCorrScale 	= seq(1, 1.06, length.out=5),
 							n_features_per_cluster = c(5, 10)
 							)
