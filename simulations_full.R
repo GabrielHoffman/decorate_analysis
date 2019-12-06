@@ -74,8 +74,10 @@ simulate_features = function(gr, rho, s, info, beta_disease, beta_confounding, n
 	epiData
 }
 
-run_simulation = function( simLocation, sim_params, i, info, n_clusters){
+run_simulation = function( simLocation, sim_params, i, info, n_features_per_cluster){
 	cat("job: ", i)
+
+	n_clusters = floor(length(simLocation) / n_features_per_cluster)
 
 	info = data.frame(Disease = as.character(sample(2, sim_params$n_samples[i], replace=TRUE)), 
 		Confound = as.character(sample(2, sim_params$n_samples[i], replace=TRUE)))
@@ -160,7 +162,7 @@ run_simulation = function( simLocation, sim_params, i, info, n_clusters){
 	beta_confounding 	= sim_params$beta_confounding[i],
 	diffCorrScale		= sim_params$diffCorrScale[i], 
 	mean_rsq 			= mean(corrValues),
-	id, chrom, cluster, pValue, stat,N,LEF))
+	id, chrom, cluster, pValue, stat,N,LEF, n_features_per_cluster))
 }
 
 # set.seed(1)
@@ -177,16 +179,14 @@ pos = seq(1, 3e7, by=3000)[1:10000]
 
 simLocation = GRanges("chr1", IRanges(pos, pos+1, names=paste0('peak_', 1:length(pos))))
 
-n_clusters = 2000
-n_features_per_cluster = length(simLocation) / n_clusters
-n_features_per_cluster
 
 sim_params = expand.grid( 	useResid 		= c(TRUE, FALSE),
 							n_samples 		= c(100, 200),
 							rho 			= c(.9), 
 							beta_disease 	= c(0, 1,3,4,5, 10),
 							beta_confounding= c(0), 
-							diffCorrScale 	= seq(1, 1.06, length.out=5)
+							diffCorrScale 	= seq(1, 1.06, length.out=5),
+							n_features_per_cluster = c(5, 10)
 							)
 
 sim_params = unique(sim_params)
@@ -203,7 +203,7 @@ sim_results = lapply( (idx[opt$batch]+1):idx[opt$batch+1], function(i){
 	# cat("\r", i, ' / ', nrow(sim_params), '   ')
 	set.seed(1)
 
-	run_simulation( simLocation, sim_params, i, info, n_clusters)
+	run_simulation( simLocation, sim_params, i, info, n_features_per_cluster)
 })
 
 # combine results
