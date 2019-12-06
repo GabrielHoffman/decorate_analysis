@@ -5,6 +5,7 @@ library(getopt)
 spec = matrix(c(
   'nbatches', 'n', 2, "integer",
   'batch'   , 'b', 0, "integer",
+  'seed'	, 's', 0, "integer",
   'prefix'  , 'p', 1, "character"
 ), byrow=TRUE, ncol=4)
 opt = getopt(spec)
@@ -184,12 +185,12 @@ simLocation = GRanges("chr1", IRanges(pos, pos+1, names=paste0('peak_', 1:length
 
 
 sim_params = expand.grid( 	useResid 		= c(TRUE, FALSE),
-							n_samples 		= c(100, 200),
+							n_samples 		= c(100, 200, 300),
 							rho 			= c(.9), 
 							beta_disease 	= c(0),
-							beta_confounding= c(.01, .1, .3, .5, .7, .9), 
+							beta_confounding= c(.01, seq(0, 1, length.out=9)[-c(1,9)]), 
 							diffCorrScale 	= seq(1, 1.06, length.out=5),
-							n_features_per_cluster = c(5, 8, 10, 15, 20, 30)
+							n_features_per_cluster = c(5, 8, 10, 15, 20, 25, 30)
 							)
 
 sim_params = unique(sim_params)
@@ -204,7 +205,7 @@ idx = floor( seq(0, nrow(sim_params), length.out=opt$nbatches+1) )
 sim_results = lapply( (idx[opt$batch]+1):idx[opt$batch+1], function(i){
 
 	# cat("\r", i, ' / ', nrow(sim_params), '   ')
-	set.seed(1)
+	set.seed( opt$seed )
 
 	run_simulation( simLocation, sim_params, i, info)
 })
