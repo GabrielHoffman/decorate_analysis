@@ -10,9 +10,7 @@ ml openssl udunits proj gdal geos
 NBATCHES=60
 export OMP_NUM_THREADS=1
 rm -f decorate_*
-seq 1 $NBATCHES | parallel -P60 /hpc/users/hoffmg01/build2/decorate_analysis/simulations_full.R --nbatches $NBATCHES --batch {} --prefix /hpc/users/hoffmg01/work/decorate/decorate
-
-# sklar5
+seq 1 $NBATCHES | parallel -P60 /hpc/users/hoffmg01/build2/decorate_analysis/simulations_full.R --nbatches $NBATCHES --batch {} --prefix /sc/orga/work/hoffmg01/decorate/sims/decorate
 
 
 # Evaluate PR curve
@@ -32,7 +30,7 @@ resSim = lapply( files, function(file){
 	})
 resSim = data.table(do.call("rbind", resSim))
 table(resSim$N)
-resSim = resSim[resSim$N==15,]
+# resSim = resSim[resSim$N==15,]
 
 sim_params = readRDS(paste0(path, 'decorate_sim_params.RDS'))
 
