@@ -151,7 +151,7 @@ run_simulation = function( simLocation, sim_params, i, info){
 
 	# Evaluate Differential Correlation between two subsets of data
 	# Use Spearman correlation to reduce the effect of outliers
-	resDiffCorr = evalDiffCorr( residValues, info$Disease, gr[rownames(residValues)], treeListClusters_collapse, method='Box', method.corr="spearman")
+	resDiffCorr = evalDiffCorr( residValues, info$Disease, gr[rownames(residValues)], treeListClusters_collapse, method='Box.permute', method.corr="spearman")
 
 	# Summarize results
 	res = combineResults( resDiffCorr, clstScore, treeListClusters, gr)
